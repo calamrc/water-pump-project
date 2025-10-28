@@ -31,36 +31,8 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
 K_SEM_DEFINE(data_sem, 0, 1);
 
-
-
-
-
 /**
  * @brief Main application entry point for Zephyr Water Pump control system
- *
- * Initializes the intelligent water pump application with the following sequence:
- * 1. System initialization and logging setup
- * 2. GPIO hardware configuration (flow sensor on GPIO 23, pump relay on GPIO 22)
- * 3. Safety timer setup for maximum runtime protection
- * 4. Interrupt service routine registration for real-time flow monitoring
- *
- * The main control loop implements demand-based pumping with two operational phases:
- *
- * **Phase 1: Sensor Monitoring (Pump OFF)**
- * - Waits indefinitely on data semaphore from ISR
- * - Processes flow measurements and detects plateaus
- * - Activates pump when stable flow conditions are achieved
- *
- * **Phase 2: Pump Runtime Control (Pump ON)**
- * - Implements timeout-based monitoring (1.5x plateau period)
- * - Continues plateau detection during pump operation
- * - Automatically shuts down pump on timeout or state changes
- *
- * The application achieves intelligent, demand-driven water pumping that:
- * - Prevents pump activation during turbulent flow periods
- * - Optimizes pump runtime based on actual demand
- * - Provides multiple layers of safety and error protection
- * - Adapts to varying flow conditions through statistical analysis
  *
  * @return Application exit code (0 for normal operation, never returns in production)
  */
@@ -72,28 +44,24 @@ int main(void)
 
     LOG_INF("Zephyr Water Pump Application %s", APP_VERSION_STRING);
 
-    // Initialize error handler first (provides system error handling)
     ret = error_handler_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize error handler (%d)", ret);
         return 0;
     }
 
-    // Initialize sensor manager
     ret = sensor_manager_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize sensor manager (%d)", ret);
         return 0;
     }
 
-    // Initialize flow analyzer
     ret = flow_analyzer_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize flow analyzer (%d)", ret);
         return 0;
     }
 
-    // Initialize pump controller (handles GPIO and safety timer)
     ret = pump_controller_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize pump controller (%d)", ret);
@@ -101,23 +69,22 @@ int main(void)
     }
 
     while (1) {
-        // Use state machine to check pump status
         bool current_pump_on = pump_controller_is_on();
 
         LOG_DBG("Waiting on semaphore (pump_on: %d)", current_pump_on);
 
         int64_t start_wait_ms = k_uptime_get();
-        // Calculate timeout based on plateau period when pump is running
         int64_t timeout_us = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5);
         k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, MAX_TIMEOUT_US));
 
         if (k_sem_take(&data_sem, timeout) == 0) {
             int64_t end_wait_ms = k_uptime_get();
+
             LOG_DBG("Semaphore taken after %lld ms", end_wait_ms - start_wait_ms);
 
-            // Get flow rate from sensor manager
             fixed_t flow_rate_fixed = sensor_manager_get_flow_rate();
             float flow_rate_lpm = fixed_to_float(flow_rate_fixed);
+
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
             if (sensor_manager_is_data_valid()) {
@@ -128,28 +95,20 @@ int main(void)
                             flow_rate_lpm, fixed_to_float(flow_analyzer_get_noise_std()),
                             fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
 
-                    // Get current period from sensor manager
                     int64_t current_period = sensor_manager_get_current_period();
 
-                    // Handle plateau period logic - similar to original Phase 1
-                    // Update latest plateau period unless we should extend pump runtime
                     if (!(current_pump_on && current_period < initial_plateau_period)) {
                         latest_plateau_period = current_period;
                     }
 
-                    // Update plateau period in pump controller
                     pump_controller_update_plateau_period(latest_plateau_period);
-
-                    // Reset flow analyzer state
                     flow_analyzer_reset();
 
-                    // Activate pump if not already running and plateau period is reasonable
                     if (!pump_controller_is_on() && current_period > 0) {
                         ret = pump_controller_turn_on(latest_plateau_period);
                         if (ret < 0) {
                             LOG_ERR("Failed to turn on pump (%d)", ret);
                         } else {
-                            // Pump started, record initial plateau period
                             initial_plateau_period = current_period;
                         }
                     }
@@ -157,22 +116,18 @@ int main(void)
             }
         } else {
             int64_t end_wait_ms = k_uptime_get();
+
             LOG_DBG("Timeout after %lld ms, resetting flow state", end_wait_ms - start_wait_ms);
 
-            // Reset sensor manager state on timeout
             sensor_manager_reset();
-
-            // Reset flow analyzer state on timeout
             flow_analyzer_reset();
 
-            // If pump is running and we timed out, turn it off (plateau period expired)
             if (pump_controller_is_on()) {
                 LOG_INF("Plateau period expired, turning off pump");
                 ret = pump_controller_turn_off();
                 if (ret < 0) {
                     LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
                 } else {
-                    // Reset plateau tracking after pump turn-off
                     initial_plateau_period = 0;
                     latest_plateau_period = 0;
                 }
