@@ -1,10 +1,7 @@
-# Copyright (c) 2021 Nordic Semiconductor ASA
+# Copyright (c) 2025 Ramon Cristopher Calam
 # SPDX-License-Identifier: Apache-2.0
 
 manifest:
-  self:
-    west-commands: scripts/west-commands.yml
-
   remotes:
     - name: zephyrproject-rtos
       url-base: https://github.com/zephyrproject-rtos
@@ -14,7 +11,5 @@ manifest:
       remote: zephyrproject-rtos
       revision: v4.2.1
       import:
-        # By using name-allowlist we can clone only the modules that are
-        # strictly needed by the application.
         name-allowlist:
-          - hal_espressif # required by ESP32 boards
+          - hal_espressif

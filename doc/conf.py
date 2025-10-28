@@ -6,9 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'Example Application'
-copyright = '2024, The Zephyr Community'
-author = 'The Zephyr Community'
+project = 'Zephyr Water Pump Application'
+copyright = '2025, Ramon Cristopher Calam'
+author = 'Ramon Cristopher Calam'
 release = '1.0.0'
 
 # -- General configuration ---------------------------------------------------
