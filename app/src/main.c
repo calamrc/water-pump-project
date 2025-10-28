@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 
+ * Copyright (c) 2025 Ramon Cristopher Calam
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -52,6 +52,16 @@ static int64_t last_sem_give_ms = 0;
 static int consecutive_invalid = 0;
 static bool pump_on = false;
 
+/**
+ * @brief Safety timer callback to prevent pump from running indefinitely
+ *
+ * Automatically shuts down the pump if it has been running continuously
+ * for the maximum allowed time (PUMP_SAFETY_TIMEOUT_MIN minutes).
+ * This provides hardware protection against system failures that could
+ * leave the pump running unattended.
+ *
+ * @param timer_id Timer identifier (unused)
+ */
 static void safety_timer_handler(struct k_timer *timer_id)
 {
     ARG_UNUSED(timer_id);
@@ -69,11 +79,22 @@ static void safety_timer_handler(struct k_timer *timer_id)
     }
 }
 
+/**
+ * @brief Calculate median value from an array of int64_t values
+ *
+ * Performs a simple bubble sort on a copy of the input array and returns
+ * the middle element. Used for robust measurement filtering in the presence
+ * of outliers.
+ *
+ * @param arr Pointer to array of int64_t values
+ * @param size Number of elements in the array (must be odd for true median)
+ * @return The median value from the sorted array
+ */
 static int64_t get_median(int64_t *arr, int size) {
     int64_t sorted[5];
 
     memcpy(sorted, arr, size * sizeof(int64_t));
-    
+
     // Simple bubble sort (small array, so efficiency is not critical)
     for (int i = 0; i < size - 1; i++) {
         for (int j = 0; j < size - i - 1; j++) {
@@ -84,10 +105,25 @@ static int64_t get_median(int64_t *arr, int size) {
             }
         }
     }
-    
+
     return sorted[size / 2];
 }
 
+/**
+ * @brief GPIO interrupt service routine for YF-S201C flow sensor
+ *
+ * Processes pulses from the hall-effect flow sensor on GPIO 23. Implements
+ * comprehensive filtering including:
+ * - Period validation and bounds checking
+ * - Median-based outlier rejection
+ * - Buffer management and circular indexing
+ * - Semaphore signaling for main thread
+ * - Stale data protection via consecutive invalid detection
+ *
+ * @param port GPIO device that triggered the interrupt
+ * @param cb GPIO callback structure
+ * @param pins Bitmask of pins that triggered the interrupt
+ */
 static void flow_sensor_isr(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
 {
     int64_t current_ticks = k_uptime_ticks();
@@ -148,6 +184,17 @@ static void flow_sensor_isr(const struct device *port, struct gpio_callback *cb,
     last_pulse_ticks = current_ticks;
 }
 
+/**
+ * @brief Perform statistical calibration for plateau detection
+ *
+ * Analyzes the current flow buffer to determine slope and noise characteristics.
+ * This calibration enables adaptive thresholding:
+ * - If slope is significant (> PLATEAU_MIN_SLOPE), assumes linear trend and
+ *   computes noise as residual standard deviation from linear fit
+ * - If slope is negligible, skips noise calculation (plateau assumption)
+ *
+ * Updates global noise_std and flow_slope variables for use in plateau detection.
+ */
 static void calibrate_plateau(void) {
     if (flow_buffer_index != 0) // Calibrate only when buffer full
         return;
@@ -185,6 +232,24 @@ static void calibrate_plateau(void) {
     LOG_DBG("Calibration complete, noise_std: %.4f, flow_slope: %.4f", noise_std, flow_slope);
 }
 
+/**
+ * @brief Core plateau detection algorithm using statistical analysis
+ *
+ * Implements sophisticated flow stability detection with adaptive thresholding:
+ * - Maintains sliding window buffer of recent flow measurements
+ * - Performs statistical calibration when buffer fills
+ * - Uses noise-adaptive epsilon threshold (3-sigma rule)
+ * - Requires consecutive stable measurements for plateau confirmation
+ * - Handles first measurement case and buffer wraparound
+ *
+ * This algorithm distinguishes between:
+ * - Stable plateaus (minimal flow variation within noise bounds)
+ * - Linear trends (significant slope requiring calibration)
+ * - Noise-induced fluctuations (statistically bounded)
+ *
+ * @param flow_rate Current flow rate measurement in L/min
+ * @return true if plateau detected, false otherwise
+ */
 static bool detect_plateau(float flow_rate) {
     LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d", flow_rate, flow_buffer_index);
 
@@ -234,6 +299,35 @@ static bool detect_plateau(float flow_rate) {
     return false;
 }
 
+/**
+ * @brief Main application entry point for Zephyr Water Pump control system
+ *
+ * Initializes the intelligent water pump application with the following sequence:
+ * 1. System initialization and logging setup
+ * 2. GPIO hardware configuration (flow sensor on GPIO 23, pump relay on GPIO 22)
+ * 3. Safety timer setup for maximum runtime protection
+ * 4. Interrupt service routine registration for real-time flow monitoring
+ *
+ * The main control loop implements demand-based pumping with two operational phases:
+ *
+ * **Phase 1: Sensor Monitoring (Pump OFF)**
+ * - Waits indefinitely on data semaphore from ISR
+ * - Processes flow measurements and detects plateaus
+ * - Activates pump when stable flow conditions are achieved
+ *
+ * **Phase 2: Pump Runtime Control (Pump ON)**
+ * - Implements timeout-based monitoring (1.5x plateau period)
+ * - Continues plateau detection during pump operation
+ * - Automatically shuts down pump on timeout or state changes
+ *
+ * The application achieves intelligent, demand-driven water pumping that:
+ * - Prevents pump activation during turbulent flow periods
+ * - Optimizes pump runtime based on actual demand
+ * - Provides multiple layers of safety and error protection
+ * - Adapts to varying flow conditions through statistical analysis
+ *
+ * @return Application exit code (0 for normal operation, never returns in production)
+ */
 int main(void)
 {
     struct gpio_callback flow_callback;
@@ -302,7 +396,7 @@ int main(void)
 
             if (flow_rate_lpm > 0.0f && period_us > 0) {
                 if (detect_plateau(flow_rate_lpm)) {
-                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.2f, epsilon: %.2f)", flow_rate_lpm, noise_std, PLATEAU_K_FACTOR * noise_std);
+                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)", flow_rate_lpm, noise_std, PLATEAU_K_FACTOR * noise_std);
 
                     if (!(pump_on && period_us < initial_plateau_period))
                         latest_plateau_period = period_us;
