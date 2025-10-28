@@ -10,6 +10,7 @@
 #include <app_version.h>
 #include <string.h>
 #include <math.h>
+#include "fixed_math.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
@@ -52,10 +53,10 @@ static volatile int buffer_index = 0;
 static volatile int64_t isr_current_period_us = 0;
 static volatile bool isr_valid_update = false;
 
-static float flow_buffer[PLATEAU_WINDOW_SIZE] = {0};
-static float flow_slope = 0.0f;
-static float noise_std = 0.0f;
-static float prev_flow = NAN;
+static fixed_t flow_buffer[PLATEAU_WINDOW_SIZE] = {0};
+static fixed_t flow_slope = 0;
+static fixed_t noise_std = 0;
+static fixed_t prev_flow = FIXED_MIN; // Use FIXED_MIN as sentinel value instead of NAN
 static int flow_buffer_index = 0;
 static int flow_diff_count = 0;
 
@@ -246,13 +247,15 @@ static void data_processing_work_handler(struct k_work *work)
 }
 
 /**
- * @brief Perform statistical calibration for plateau detection
+ * @brief Perform statistical calibration for plateau detection using fixed-point arithmetic
  *
  * Analyzes the current flow buffer to determine slope and noise characteristics.
  * This calibration enables adaptive thresholding:
- * - If slope is significant (> PLATEAU_MIN_SLOPE), assumes linear trend and
+ * - If slope is significant (> FIXED_PLATEAU_MIN_SLOPE), assumes linear trend and
  *   computes noise as residual standard deviation from linear fit
  * - If slope is negligible, skips noise calculation (plateau assumption)
+ *
+ * All calculations performed in Q16.16 fixed-point for memory efficiency.
  *
  * Updates global noise_std and flow_slope variables for use in plateau detection.
  */
@@ -260,46 +263,54 @@ static void calibrate_plateau(void) {
     if (flow_buffer_index != 0) // Calibrate only when buffer full
         return;
 
-    // Compute differences for slope
-    float diffs[PLATEAU_WINDOW_SIZE - 1];
-    float sum_diffs = 0.0f;
+    // Compute differences for slope using fixed-point arithmetic
+    fixed_t sum_diffs = 0;
 
     for (int i = 0; i < PLATEAU_WINDOW_SIZE - 1; i++) {
-        diffs[i] = flow_buffer[(flow_buffer_index + i + 1) % PLATEAU_WINDOW_SIZE] - flow_buffer[(flow_buffer_index + i) % PLATEAU_WINDOW_SIZE];
-        sum_diffs += diffs[i];
+        fixed_t diff = fixed_sub(flow_buffer[(flow_buffer_index + i + 1) % PLATEAU_WINDOW_SIZE],
+                                flow_buffer[(flow_buffer_index + i) % PLATEAU_WINDOW_SIZE]);
+        sum_diffs = fixed_add(sum_diffs, diff);
     }
 
-    flow_slope = sum_diffs / (PLATEAU_WINDOW_SIZE - 1);
+    flow_slope = fixed_div_int(sum_diffs, PLATEAU_WINDOW_SIZE - 1);
 
-    if (fabsf(flow_slope) > PLATEAU_MIN_SLOPE) { // Assume linear if slope significant
+    // Check if slope is significant using fixed-point comparison
+    if (fixed_gt(fixed_abs(flow_slope), FIXED_PLATEAU_MIN_SLOPE)) {
         // Predict linear values
-        float predicted[PLATEAU_WINDOW_SIZE];
+        fixed_t predicted[PLATEAU_WINDOW_SIZE];
 
         for (int i = 0; i < PLATEAU_WINDOW_SIZE; i++) {
-            predicted[i] = flow_buffer[0] + flow_slope * i;
+            fixed_t slope_term = fixed_mul_int(flow_slope, i);
+            predicted[i] = fixed_add(flow_buffer[0], slope_term);
         }
 
-        // Compute residuals and noise std
-        float sum_sq_res = 0.0f;
+        // Compute residuals and noise std using fixed-point
+        fixed_t sum_sq_res = 0;
 
         for (int i = 0; i < PLATEAU_WINDOW_SIZE; i++) {
-            float res = flow_buffer[i] - predicted[i];
-            sum_sq_res += res * res;
+            fixed_t residual = fixed_sub(flow_buffer[i], predicted[i]);
+            sum_sq_res = fixed_add(sum_sq_res, fixed_mul(residual, residual));
         }
 
-        noise_std = sqrtf(sum_sq_res / PLATEAU_WINDOW_SIZE); // Approx population std
+        // Calculate standard deviation
+        fixed_t mean_sq_res = fixed_div_int(sum_sq_res, PLATEAU_WINDOW_SIZE);
+        noise_std = fixed_sqrt(fixed_abs(mean_sq_res));
+    } else {
+        // Slope negligible - assume plateau, no noise calculation needed
+        noise_std = 0;
     }
 
-    LOG_DBG("Calibration complete, noise_std: %.4f, flow_slope: %.4f", noise_std, flow_slope);
+    LOG_DBG("Calibration complete, noise_std: %.4f, flow_slope: %.4f",
+            fixed_to_float(noise_std), fixed_to_float(flow_slope));
 }
 
 /**
- * @brief Core plateau detection algorithm using statistical analysis
+ * @brief Core plateau detection algorithm using fixed-point statistical analysis
  *
  * Implements sophisticated flow stability detection with adaptive thresholding:
- * - Maintains sliding window buffer of recent flow measurements
- * - Performs statistical calibration when buffer fills
- * - Uses noise-adaptive epsilon threshold (3-sigma rule)
+ * - Maintains sliding window buffer of recent flow measurements in Q16.16 format
+ * - Performs statistical calibration when buffer fills using fixed-point math
+ * - Uses noise-adaptive epsilon threshold (3-sigma rule) in fixed-point
  * - Requires consecutive stable measurements for plateau confirmation
  * - Handles first measurement case and buffer wraparound
  *
@@ -308,14 +319,17 @@ static void calibrate_plateau(void) {
  * - Linear trends (significant slope requiring calibration)
  * - Noise-induced fluctuations (statistically bounded)
  *
- * @param flow_rate Current flow rate measurement in L/min
+ * All operations performed in Q16.16 fixed-point arithmetic for memory efficiency.
+ *
+ * @param flow_rate_fixed Current flow rate measurement in fixed-point L/min
  * @return true if plateau detected, false otherwise
  */
-static bool detect_plateau(float flow_rate) {
-    LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d", flow_rate, flow_buffer_index);
+static bool detect_plateau(fixed_t flow_rate_fixed) {
+    LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d",
+            fixed_to_float(flow_rate_fixed), flow_buffer_index);
 
     // Add to circular buffer
-    flow_buffer[flow_buffer_index] = flow_rate;
+    flow_buffer[flow_buffer_index] = flow_rate_fixed;
     flow_buffer_index = (flow_buffer_index + 1) % PLATEAU_WINDOW_SIZE;
 
     LOG_DBG("Added to buffer, new buffer_index: %d", flow_buffer_index);
@@ -325,22 +339,26 @@ static bool detect_plateau(float flow_rate) {
         calibrate_plateau();
     }
 
-    if (isnan(prev_flow)) { // First value
-        LOG_DBG("First flow value, setting prev_flow: %.3f", flow_rate);
+    if (fixed_eq(prev_flow, FIXED_MIN)) { // First value (using FIXED_MIN as sentinel)
+        LOG_DBG("First flow value, setting prev_flow: %.3f", fixed_to_float(flow_rate_fixed));
 
-        prev_flow = flow_rate;
+        prev_flow = flow_rate_fixed;
         return false;
     }
 
-    float delta = fabsf(flow_rate - prev_flow);
-    float epsilon = PLATEAU_K_FACTOR * noise_std;
+    // Calculate delta and epsilon using fixed-point arithmetic
+    fixed_t delta = fixed_abs(fixed_sub(flow_rate_fixed, prev_flow));
+    fixed_t epsilon = fixed_mul(FIXED_PLATEAU_K_FACTOR, noise_std);
 
-    if (noise_std == 0.0f)
-        epsilon = 0.01f; // Fallback if no calibration
+    // Use fallback epsilon if no calibration
+    if (fixed_eq(noise_std, 0)) {
+        epsilon = FIXED_EPSILON_FALLBACK;
+    }
 
-    LOG_DBG("Calculated delta: %.4f, epsilon: %.4f, prev_flow: %.3f", delta, epsilon, prev_flow);
+    LOG_DBG("Calculated delta: %.4f, epsilon: %.4f, prev_flow: %.3f",
+            fixed_to_float(delta), fixed_to_float(epsilon), fixed_to_float(prev_flow));
 
-    if (delta < epsilon) {
+    if (fixed_lt(delta, epsilon)) {
         flow_diff_count++;
         LOG_DBG("Delta < epsilon, flow_diff_count: %d", flow_diff_count);
 
@@ -353,9 +371,9 @@ static bool detect_plateau(float flow_rate) {
         flow_diff_count = 0;
     }
 
-    prev_flow = flow_rate;
+    prev_flow = flow_rate_fixed;
 
-    LOG_DBG("Updated prev_flow: %.3f", prev_flow);
+    LOG_DBG("Updated prev_flow: %.3f", fixed_to_float(prev_flow));
 
     return false;
 }
@@ -461,13 +479,16 @@ int main(void)
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
             if (flow_rate_lpm > 0.0f && period_us > 0) {
+                // Convert flow rate to fixed-point for plateau detection
+                fixed_t flow_rate_fixed = fixed_from_float(flow_rate_lpm);
+
                 // Protect flow buffer access in plateau detection
                 k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
-                bool plateau_detected = detect_plateau(flow_rate_lpm);
+                bool plateau_detected = detect_plateau(flow_rate_fixed);
                 k_mutex_unlock(&flow_buffer_mutex);
 
                 if (plateau_detected) {
-                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)", flow_rate_lpm, noise_std, PLATEAU_K_FACTOR * noise_std);
+                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)", flow_rate_lpm, fixed_to_float(noise_std), fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, noise_std)));
 
                     // Protect pump state check
                     k_mutex_lock(&pump_state_mutex, K_FOREVER);
@@ -478,10 +499,10 @@ int main(void)
                     // Protect flow buffer reset
                     k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
                     flow_buffer_index = 0;
-                    prev_flow = NAN;
+                    prev_flow = FIXED_MIN;
                     flow_diff_count = 0;
-                    noise_std = 0.0f;
-                    flow_slope = 0.0f;
+                    noise_std = 0;
+                    flow_slope = 0;
                     memset(flow_buffer, 0, sizeof(flow_buffer));
                     k_mutex_unlock(&flow_buffer_mutex);
 
@@ -548,10 +569,10 @@ int main(void)
             // Protect flow buffer reset in timeout section
             k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
             flow_buffer_index = 0;
-            prev_flow = NAN;
+            prev_flow = FIXED_MIN;
             flow_diff_count = 0;
-            noise_std = 0.0f;
-            flow_slope = 0.0f;
+            noise_std = 0;
+            flow_slope = 0;
             memset(flow_buffer, 0, sizeof(flow_buffer));
             k_mutex_unlock(&flow_buffer_mutex);
         }
