@@ -7,6 +7,7 @@ This is a simple Sphinx documentation setup for ``water-pump``.
    :maxdepth: 2
    :caption: Contents
 
+   application
    zephyr
 
 Indices and tables
