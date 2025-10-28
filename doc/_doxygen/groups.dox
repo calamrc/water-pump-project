@@ -15,3 +15,51 @@
  *
  * @}
  */
+
+/**
+ * @defgroup flow_measurement Flow Measurement System
+ * @{
+ *
+ * @brief Components for processing flow sensor data and calculating rates
+ *
+ * This module handles the YF-S201C flow sensor integration, including interrupt
+ * processing, period measurement filtering, and flow rate calculations.
+ *
+ * @}
+ */
+
+/**
+ * @defgroup plateau_detection Plateau Detection Algorithm
+ * @{
+ *
+ * @brief Statistical analysis for flow stability determination
+ *
+ * Implements advanced algorithms to detect stable flow conditions by analyzing
+ * flow rate trends, noise characteristics, and slope calculations.
+ *
+ * @}
+ */
+
+/**
+ * @defgroup pump_control Pump Control and Safety
+ * @{
+ *
+ * @brief Pump relay management with safety mechanisms
+ *
+ * Manages pump activation/deactivation with integrated safety features including
+ * runtime timeouts, stale data protection, and error handling.
+ *
+ * @}
+ */
+
+/**
+ * @defgroup signal_processing Signal Processing Utilities
+ * @{
+ *
+ * @brief Filtering and statistical analysis functions
+ *
+ * Provides robust signal processing including median filtering, outlier rejection,
+ * and noise estimation for reliable sensor data processing.
+ *
+ * @}
+ */
