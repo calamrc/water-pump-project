@@ -9,4 +9,4 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(app LANGUAGES C)
 
-target_sources(app PRIVATE src/main.c src/sensor_manager.c src/flow_analyzer.c)
+target_sources(app PRIVATE src/main.c src/sensor_manager.c src/flow_analyzer.c src/pump_controller.c src/error_handler.c)

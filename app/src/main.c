@@ -13,6 +13,8 @@
 #include "fixed_math.h"
 #include "sensor_manager.h"
 #include "flow_analyzer.h"
+#include "pump_controller.h"
+#include "error_handler.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
@@ -28,46 +30,6 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 #define MAX_TIMEOUT_US 1000000LL // 1 second cap for timeout
 
 K_SEM_DEFINE(data_sem, 0, 1);
-
-// Thread safety mutexes
-K_MUTEX_DEFINE(pump_state_mutex);
-
-static const struct device *gpio_dev;
-
-static struct k_timer safety_timer;
-static bool pump_on = false;
-
-/**
- * @brief Safety timer callback to prevent pump from running indefinitely
- *
- * Automatically shuts down the pump if it has been running continuously
- * for the maximum allowed time (PUMP_SAFETY_TIMEOUT_MIN minutes).
- * This provides hardware protection against system failures that could
- * leave the pump running unattended.
- *
- * @param timer_id Timer identifier (unused)
- */
-static void safety_timer_handler(struct k_timer *timer_id)
-{
-    ARG_UNUSED(timer_id);
-
-    // Protect pump state access
-    k_mutex_lock(&pump_state_mutex, K_FOREVER);
-    if (pump_on) {
-        pump_on = false;
-        k_mutex_unlock(&pump_state_mutex);
-
-        int ret = gpio_pin_set(gpio_dev, 22, 1);
-
-        if (ret < 0) {
-            LOG_ERR("Safety: Could not set pump relay to OFF (%d)", ret);
-        } else {
-            LOG_INF("Safety: Pump turned OFF (max runtime exceeded)");
-        }
-    } else {
-        k_mutex_unlock(&pump_state_mutex);
-    }
-}
 
 
 
@@ -110,6 +72,13 @@ int main(void)
 
     LOG_INF("Zephyr Water Pump Application %s", APP_VERSION_STRING);
 
+    // Initialize error handler first (provides system error handling)
+    ret = error_handler_init();
+    if (ret < 0) {
+        LOG_ERR("Could not initialize error handler (%d)", ret);
+        return 0;
+    }
+
     // Initialize sensor manager
     ret = sensor_manager_init();
     if (ret < 0) {
@@ -124,36 +93,22 @@ int main(void)
         return 0;
     }
 
-    k_timer_init(&safety_timer, safety_timer_handler, NULL);
-
-    gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    if (!device_is_ready(gpio_dev)) {
-        LOG_ERR("GPIO device not ready");
-        return 0;
-    }
-
-    ret = gpio_pin_configure(gpio_dev, 22, GPIO_OUTPUT);
+    // Initialize pump controller (handles GPIO and safety timer)
+    ret = pump_controller_init();
     if (ret < 0) {
-        LOG_ERR("Could not configure pump relay GPIO (%d)", ret);
-        return 0;
-    }
-
-    ret = gpio_pin_set(gpio_dev, 22, 1);
-    if (ret < 0) {
-        LOG_ERR("Could not set initial pump relay state (%d)", ret);
+        LOG_ERR("Could not initialize pump controller (%d)", ret);
         return 0;
     }
 
     while (1) {
-        // Protect pump state access
-        k_mutex_lock(&pump_state_mutex, K_FOREVER);
-        bool current_pump_on = pump_on;
-        k_mutex_unlock(&pump_state_mutex);
+        // Use state machine to check pump status
+        bool current_pump_on = pump_controller_is_on();
 
-        LOG_DBG("Waiting on semaphore (pump_on: %d, timeout_us: %lld)", current_pump_on, current_pump_on ? latest_plateau_period * 1.5 : -1LL);
+        LOG_DBG("Waiting on semaphore (pump_on: %d)", current_pump_on);
 
         int64_t start_wait_ms = k_uptime_get();
-        int64_t timeout_us = latest_plateau_period * 1.5;
+        // Calculate timeout based on plateau period when pump is running
+        int64_t timeout_us = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5);
         k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, MAX_TIMEOUT_US));
 
         if (k_sem_take(&data_sem, timeout) == 0) {
@@ -166,81 +121,62 @@ int main(void)
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
             if (sensor_manager_is_data_valid()) {
-
                 bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed);
 
                 if (plateau_detected) {
-                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)", flow_rate_lpm, fixed_to_float(flow_analyzer_get_noise_std()), fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
+                    LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
+                            flow_rate_lpm, fixed_to_float(flow_analyzer_get_noise_std()),
+                            fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
 
                     // Get current period from sensor manager
                     int64_t current_period = sensor_manager_get_current_period();
 
-                    // Protect pump state check
-                    k_mutex_lock(&pump_state_mutex, K_FOREVER);
-                    if (!(pump_on && current_period < initial_plateau_period))
+                    // Handle plateau period logic - similar to original Phase 1
+                    // Update latest plateau period unless we should extend pump runtime
+                    if (!(current_pump_on && current_period < initial_plateau_period)) {
                         latest_plateau_period = current_period;
-                    k_mutex_unlock(&pump_state_mutex);
+                    }
+
+                    // Update plateau period in pump controller
+                    pump_controller_update_plateau_period(latest_plateau_period);
 
                     // Reset flow analyzer state
                     flow_analyzer_reset();
 
-                    // Protect pump state check and update
-                    k_mutex_lock(&pump_state_mutex, K_FOREVER);
-                    if (!pump_on) {
-                        // Unlock temporarily to do GPIO operations
-                        k_mutex_unlock(&pump_state_mutex);
-
-                        initial_plateau_period = current_period;
-
-                        ret = gpio_pin_set(gpio_dev, 22, 0);
+                    // Activate pump if not already running and plateau period is reasonable
+                    if (!pump_controller_is_on() && current_period > 0) {
+                        ret = pump_controller_turn_on(latest_plateau_period);
                         if (ret < 0) {
-                            LOG_ERR("Could not set pump relay to ON (%d)", ret);
+                            LOG_ERR("Failed to turn on pump (%d)", ret);
                         } else {
-                            // Protect pump state update
-                            k_mutex_lock(&pump_state_mutex, K_FOREVER);
-                            pump_on = true;
-                            k_mutex_unlock(&pump_state_mutex);
-
-                            LOG_INF("Pump turned ON");
-                            k_timer_start(&safety_timer, K_MINUTES(PUMP_SAFETY_TIMEOUT_MIN), K_NO_WAIT);
+                            // Pump started, record initial plateau period
+                            initial_plateau_period = current_period;
                         }
-                    } else {
-                        k_mutex_unlock(&pump_state_mutex);
                     }
                 }
             }
         } else {
             int64_t end_wait_ms = k_uptime_get();
-
             LOG_DBG("Timeout after %lld ms, resetting flow state", end_wait_ms - start_wait_ms);
 
             // Reset sensor manager state on timeout
             sensor_manager_reset();
 
-            // Protect pump state check and update
-            k_mutex_lock(&pump_state_mutex, K_FOREVER);
-            if (pump_on) {
-                // Unlock to do GPIO operations
-                k_mutex_unlock(&pump_state_mutex);
-
-                ret = gpio_pin_set(gpio_dev, 22, 1); // OFF
-                if (ret < 0) {
-                    LOG_ERR("Could not set pump relay to OFF (%d)", ret);
-                } else {
-                    // Protect pump state update
-                    k_mutex_lock(&pump_state_mutex, K_FOREVER);
-                    pump_on = false;
-                    k_mutex_unlock(&pump_state_mutex);
-
-                    LOG_INF("Pump turned OFF");
-                    k_timer_stop(&safety_timer);
-                }
-            } else {
-                k_mutex_unlock(&pump_state_mutex);
-            }
-
             // Reset flow analyzer state on timeout
             flow_analyzer_reset();
+
+            // If pump is running and we timed out, turn it off (plateau period expired)
+            if (pump_controller_is_on()) {
+                LOG_INF("Plateau period expired, turning off pump");
+                ret = pump_controller_turn_off();
+                if (ret < 0) {
+                    LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
+                } else {
+                    // Reset plateau tracking after pump turn-off
+                    initial_plateau_period = 0;
+                    latest_plateau_period = 0;
+                }
+            }
         }
     }
 
