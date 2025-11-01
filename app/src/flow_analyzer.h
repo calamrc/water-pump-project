@@ -59,9 +59,10 @@ int flow_analyzer_init(void);
  * - Tracks consecutive stable measurements
  *
  * @param flow_rate Fixed-point flow rate measurement (L/min)
+ * @param k_factor Fixed-point multiplier for noise threshold (e.g., 2.0 for 2-sigma detection)
  * @return true if plateau detected, false otherwise
  */
-bool flow_analyzer_detect_plateau(fixed_t flow_rate);
+bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor);
 
 /**
  * @brief Perform statistical calibration of flow characteristics
