@@ -25,6 +25,7 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 #define PLATEAU_WINDOW_SIZE 5 // Sliding window for calibration
 #define PLATEAU_MIN_SLOPE 0.01f // Minimum slope to assume linear phase (L/min per sample)
 #define PLATEAU_K_FACTOR 3.0f // Threshold multiplier (3-sigma for Gaussian noise)
+#define PLATEAU_INITIAL_K_FACTOR 2.0f // Threshold multiplier (1-sigma for Gaussian noise)
 
 #define PUMP_SAFETY_TIMEOUT_MIN 5 // Max pump runtime in minutes
 #define MAX_TIMEOUT_US 1000000LL // 1 second cap for timeout
@@ -88,7 +89,7 @@ int main(void)
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
             if (sensor_manager_is_data_valid()) {
-                bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed);
+                bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed, !pump_controller_is_on() ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR);
 
                 if (plateau_detected) {
                     LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
