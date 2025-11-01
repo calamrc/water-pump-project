@@ -362,6 +362,9 @@ static inline fixed_t fixed_stddev(const fixed_t *arr, size_t count, fixed_t mea
 /** Plateau minimum slope in fixed-point (0.01 L/min per sample) */
 #define FIXED_PLATEAU_MIN_SLOPE fixed_from_float(0.01f)
 
+/** Plateau initial K-factor multiplier in fixed-point (2.0) */
+#define FIXED_PLATEAU_INITIAL_K_FACTOR fixed_from_float(2.0f)
+
 /** Plateau K-factor multiplier in fixed-point (3.0) */
 #define FIXED_PLATEAU_K_FACTOR fixed_from_float(3.0f)
 

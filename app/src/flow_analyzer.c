@@ -53,7 +53,7 @@ int flow_analyzer_init(void)
     return 0;
 }
 
-bool flow_analyzer_detect_plateau(fixed_t flow_rate)
+bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
 {
     LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d",
             fixed_to_float(flow_rate), flow_buffer_index);
@@ -78,7 +78,7 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate)
 
     // Calculate delta and epsilon using fixed-point arithmetic
     fixed_t delta = fixed_abs(fixed_sub(flow_rate, prev_flow));
-    fixed_t epsilon = fixed_mul(FIXED_PLATEAU_K_FACTOR, noise_std);
+    fixed_t epsilon = fixed_mul(k_factor, noise_std);
 
     // Use fallback epsilon if no calibration
     if (fixed_eq(noise_std, 0)) {
