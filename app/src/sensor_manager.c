@@ -225,7 +225,12 @@ fixed_t sensor_manager_get_flow_rate(void)
     int64_t current_period = period_us;
     k_mutex_unlock(&sensor_period_mutex);
 
-    if (current_period > 0) {
+    if (current_period > 0 && current_period <= INT32_MAX) {
+        // Bounds check to prevent overflow
+        if (current_period * YF_S201C_PULSES_PER_LITER > INT64_MAX / 1000000) {
+            LOG_WRN("Flow rate calculation would overflow, returning 0");
+            return 0;
+        }
         // Flow rate calculation: (60 seconds/min) * (1e6 us/second) / (period_us * pulses_per_liter)
         float flow_rate_lpm = (60.0f * 1000000.0f) / (current_period * YF_S201C_PULSES_PER_LITER);
         return fixed_from_float(flow_rate_lpm);
