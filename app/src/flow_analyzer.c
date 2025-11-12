@@ -58,42 +58,72 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
     LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d",
             fixed_to_float(flow_rate), flow_buffer_index);
 
+    // Thread-safe buffer access
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+
+    // Bounds check for buffer access
+    if (flow_buffer_index < 0 || flow_buffer_index >= PLATEAU_WINDOW_SIZE) {
+        LOG_ERR("Invalid buffer_index: %d", flow_buffer_index);
+        k_mutex_unlock(&flow_buffer_mutex);
+        return false;
+    }
+
     // Add to circular buffer
     flow_buffer[flow_buffer_index] = flow_rate;
     flow_buffer_index = (flow_buffer_index + 1) % PLATEAU_WINDOW_SIZE;
 
+    bool buffer_full = (flow_buffer_index == 0);
+
+    k_mutex_unlock(&flow_buffer_mutex);
+
     LOG_DBG("Added to buffer, new buffer_index: %d", flow_buffer_index);
 
-    if (flow_buffer_index == 0) { // Buffer full, calibrate
+    if (buffer_full) { // Buffer full, calibrate
         LOG_DBG("Buffer full, triggering calibration");
         flow_analyzer_calibrate_plateau();
     }
 
-    if (fixed_eq(prev_flow, FIXED_MIN)) { // First value (using FIXED_MIN as sentinel)
+    // Thread-safe access to prev_flow
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+    bool is_first_value = fixed_eq(prev_flow, FIXED_MIN);
+    k_mutex_unlock(&flow_buffer_mutex);
+
+    if (is_first_value) { // First value (using FIXED_MIN as sentinel)
         LOG_DBG("First flow value, setting prev_flow: %.3f", fixed_to_float(flow_rate));
 
+        k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
         prev_flow = flow_rate;
+        k_mutex_unlock(&flow_buffer_mutex);
         return false;
     }
 
+    // Thread-safe access to prev_flow and noise_std
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+    fixed_t current_prev_flow = prev_flow;
+    fixed_t current_noise_std = noise_std;
+    k_mutex_unlock(&flow_buffer_mutex);
+
     // Calculate delta and epsilon using fixed-point arithmetic
-    fixed_t delta = fixed_abs(fixed_sub(flow_rate, prev_flow));
-    fixed_t epsilon = fixed_mul(k_factor, noise_std);
+    fixed_t delta = fixed_abs(fixed_sub(flow_rate, current_prev_flow));
+    fixed_t epsilon = fixed_mul(k_factor, current_noise_std);
 
     // Use fallback epsilon if no calibration
-    if (fixed_eq(noise_std, 0)) {
+    if (fixed_eq(current_noise_std, 0)) {
         epsilon = FIXED_EPSILON_FALLBACK;
     }
 
     LOG_DBG("Calculated delta: %.4f, epsilon: %.4f, prev_flow: %.3f",
-            fixed_to_float(delta), fixed_to_float(epsilon), fixed_to_float(prev_flow));
+            fixed_to_float(delta), fixed_to_float(epsilon), fixed_to_float(current_prev_flow));
 
+    // Thread-safe access to flow_diff_count
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
     if (fixed_lt(delta, epsilon)) {
         flow_diff_count++;
         LOG_DBG("Delta < epsilon, flow_diff_count: %d", flow_diff_count);
 
         if (flow_diff_count >= PLATEAU_CONFIRM_COUNT) {
             LOG_DBG("Plateau detected (flow_diff_count >= %d)", PLATEAU_CONFIRM_COUNT);
+            k_mutex_unlock(&flow_buffer_mutex);
             return true; // Plateau detected
         }
     } else {
@@ -102,8 +132,9 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
     }
 
     prev_flow = flow_rate;
+    k_mutex_unlock(&flow_buffer_mutex);
 
-    LOG_DBG("Updated prev_flow: %.3f", fixed_to_float(prev_flow));
+    LOG_DBG("Updated prev_flow: %.3f", fixed_to_float(flow_rate));
 
     return false;
 }

@@ -1,0 +1,21 @@
+# Copyright (c) 2025 Ramon Cristopher Calam
+# SPDX-License-Identifier: Apache-2.0
+
+menu "Pump Control Configuration"
+
+	config PUMP_NO_FLOW_MULTIPLIER
+		string "No-flow timer multiplier (e.g. 1.2 for 1.2x plateau period)"
+		default "1.2"
+		help
+			Multiplier for plateau period to set no-flow timeout.
+			Lower values mean faster shutdown when flow stops.
+
+	config PUMP_NO_FLOW_DEBOUNCE_COUNT
+		int "No-flow debounce count"
+		default 2
+		range 1 10
+		help
+			Number of consecutive timer expirations required before triggering shutdown.
+			Prevents false shutdown on flow irregularities.
+
+endmenu

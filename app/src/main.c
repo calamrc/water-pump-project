@@ -18,6 +18,7 @@
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
+// Configuration constants
 #define FLOW_THRESHOLD_L_PER_MIN 0.1f // Minimum flow rate to consider active
 #define PUMP_ON_DEBOUNCE_MS 3000 // Delay in ms before allowing pump to turn on
 
@@ -29,6 +30,10 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
 #define PUMP_SAFETY_TIMEOUT_MIN 5 // Max pump runtime in minutes
 #define MAX_TIMEOUT_US 1000000LL // 1 second cap for timeout
+
+// Error handling constants
+#define ERROR_INIT_RETRY_COUNT 3
+#define ERROR_INIT_RETRY_DELAY_MS 100
 
 K_SEM_DEFINE(data_sem, 0, 1);
 
@@ -45,28 +50,39 @@ int main(void)
 
     LOG_INF("Zephyr Water Pump Application %s", APP_VERSION_STRING);
 
+    // Initialize error handler first (critical for other modules)
     ret = error_handler_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize error handler (%d)", ret);
-        return 0;
+        return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
     }
 
-    ret = sensor_manager_init();
+    // Initialize sensor manager with retry
+    for (int retry = 0; retry < ERROR_INIT_RETRY_COUNT; retry++) {
+        ret = sensor_manager_init();
+        if (ret == 0) break;
+        LOG_WRN("Sensor manager init failed (attempt %d/%d): %d", retry + 1, ERROR_INIT_RETRY_COUNT, ret);
+        if (retry < ERROR_INIT_RETRY_COUNT - 1) {
+            k_msleep(ERROR_INIT_RETRY_DELAY_MS);
+        }
+    }
     if (ret < 0) {
-        LOG_ERR("Could not initialize sensor manager (%d)", ret);
-        return 0;
+        LOG_ERR("Could not initialize sensor manager after %d attempts (%d)", ERROR_INIT_RETRY_COUNT, ret);
+        return ERROR_REPORT_CRITICAL(ERROR_SENSOR_INIT_FAILED);
     }
 
+    // Initialize flow analyzer
     ret = flow_analyzer_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize flow analyzer (%d)", ret);
-        return 0;
+        return ERROR_REPORT_CRITICAL(ERROR_FLOW_CALCULATION_ERROR);
     }
 
+    // Initialize pump controller
     ret = pump_controller_init();
     if (ret < 0) {
         LOG_ERR("Could not initialize pump controller (%d)", ret);
-        return 0;
+        return ERROR_REPORT_CRITICAL(ERROR_PUMP_GPIO_FAILED);
     }
 
     while (1) {
