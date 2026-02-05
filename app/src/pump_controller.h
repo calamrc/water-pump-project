@@ -131,7 +131,7 @@ int pump_controller_cleanup(void);
  * Configuration Constants (for Phase 2 compatibility)
  * ============================================================================ */
 
-#define PUMP_CONTROLLER_RELAY_PIN 22
+#define PUMP_CONTROLLER_RELAY_PIN 19
 #define PUMP_CONTROLLER_TIMEOUT_MIN PUMP_SAFETY_TIMEOUT_MIN
 
 #endif /* PUMP_CONTROLLER_H */
