@@ -193,21 +193,21 @@ int sensor_manager_init(void)
     }
 
     // Configure flow sensor GPIO (input with pull-up)
-    int ret = gpio_pin_configure(gpio_dev, 23, GPIO_INPUT | GPIO_PULL_UP);
+    int ret = gpio_pin_configure(gpio_dev, 18, GPIO_INPUT | GPIO_PULL_UP);
     if (ret < 0) {
         LOG_ERR("Could not configure flow sensor GPIO (%d)", ret);
         return ret;
     }
 
     // Enable interrupt on falling edge
-    ret = gpio_pin_interrupt_configure(gpio_dev, 23, GPIO_INT_EDGE_FALLING);
+    ret = gpio_pin_interrupt_configure(gpio_dev, 18, GPIO_INT_EDGE_FALLING);
     if (ret < 0) {
         LOG_ERR("Could not enable GPIO interrupt (%d)", ret);
         return ret;
     }
 
     // Add callback
-    gpio_init_callback(&flow_callback, sensor_isr, BIT(23));
+    gpio_init_callback(&flow_callback, sensor_isr, BIT(18));
     ret = gpio_add_callback(gpio_dev, &flow_callback);
     if (ret < 0) {
         LOG_ERR("Could not add GPIO callback (%d)", ret);
@@ -295,7 +295,7 @@ void sensor_manager_reset(void)
 int sensor_manager_cleanup(void)
 {
     // Disable interrupt
-    int ret = gpio_pin_interrupt_configure(gpio_dev, 23, GPIO_INT_DISABLE);
+    int ret = gpio_pin_interrupt_configure(gpio_dev, 18, GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("Could not disable GPIO interrupt (%d)", ret);
         return ret;
