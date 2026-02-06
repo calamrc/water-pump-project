@@ -109,6 +109,7 @@ int sensor_manager_cleanup(void);
 #define SENSOR_MANAGER_BUFFER_SIZE 5
 #define SENSOR_MANAGER_WORKQUEUE_STACK_SIZE 1024
 #define SENSOR_MANAGER_WORKQUEUE_PRIORITY -1
+#define FLOW_SENSOR_PIN 18
 
 /* External semaphore reference for main communication */
 extern struct k_sem data_sem;
