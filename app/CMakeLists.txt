@@ -9,4 +9,6 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(app LANGUAGES C)
 
-target_sources(app PRIVATE src/main.c src/flow_analyzer.c src/error_handler.c)
+target_include_directories(app PRIVATE include)
+
+target_sources(app PRIVATE src/main.c src/flow_analyzer.c src/error_handler.c src/thread_manager.c)
