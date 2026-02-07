@@ -418,10 +418,121 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 
 void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 {
-    LOG_INF("Safety monitor thread started (placeholder)");
+    LOG_INF("Safety monitor thread started");
+
+    /* Get pump controller device reference */
+    const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
+    if (!device_is_ready(pump)) {
+        LOG_ERR("Pump controller device not ready in safety monitor thread");
+        return;
+    }
+
+    /* Safety monitoring state */
+    int64_t pump_start_time = 0;
+    bool pump_was_on = false;
+    bool emergency_stop_active = false;
+    uint32_t safety_check_count = 0;
+    uint32_t safety_warnings = 0;
+    uint32_t emergency_stops = 0;
+
+    LOG_INF("Safety monitor thread ready - max runtime: %d min, check interval: %d ms",
+           CONFIG_SAFETY_MONITOR_MAX_RUNTIME_MINUTES,
+           CONFIG_SAFETY_MONITOR_CHECK_INTERVAL_MS);
+
     while (true) {
+        int64_t current_time = k_uptime_get();
+        bool pump_currently_on = pump_controller_is_on(pump);
+
+        /* Track pump state changes for independent runtime monitoring */
+        if (pump_currently_on && !pump_was_on) {
+            /* Pump just turned on - start independent timing */
+            pump_start_time = current_time;
+            emergency_stop_active = false;
+            LOG_INF("Safety monitor: Pump start detected, beginning runtime tracking");
+        } else if (!pump_currently_on && pump_was_on) {
+            /* Pump just turned off - reset timing */
+            pump_start_time = 0;
+            LOG_INF("Safety monitor: Pump stop detected, resetting runtime tracking");
+        }
+        pump_was_on = pump_currently_on;
+
+        /* Perform safety checks when pump is running */
+        if (pump_currently_on && !emergency_stop_active) {
+            safety_check_count++;
+
+            /* Independent runtime timeout check */
+            int64_t runtime_ms = current_time - pump_start_time;
+            int64_t max_runtime_ms = (int64_t)CONFIG_SAFETY_MONITOR_MAX_RUNTIME_MINUTES * 60 * 1000;
+            int64_t warning_threshold_ms = (int64_t)CONFIG_SAFETY_MONITOR_WARNING_THRESHOLD_MINUTES * 60 * 1000;
+
+            /* Issue warning when approaching timeout */
+            if (runtime_ms >= warning_threshold_ms && runtime_ms < max_runtime_ms) {
+                safety_warnings++;
+                LOG_WRN("Safety monitor: Pump runtime warning - %lld/%lld ms (check #%u)",
+                       runtime_ms, max_runtime_ms, safety_check_count);
+            }
+
+            /* Emergency stop if maximum runtime exceeded */
+            if (runtime_ms >= max_runtime_ms) {
+                emergency_stops++;
+                emergency_stop_active = true;
+                LOG_ERR("Safety monitor: EMERGENCY STOP - Maximum runtime exceeded (%lld ms > %lld ms)",
+                       runtime_ms, max_runtime_ms);
+
+                int ret = pump_controller_emergency_stop(pump);
+                if (ret < 0) {
+                    LOG_ERR("Safety monitor: Failed to execute emergency stop (%d)", ret);
+                    thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
+                } else {
+                    LOG_INF("Safety monitor: Emergency stop executed successfully");
+                    thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+                }
+            }
+
+            /* Periodic safety system check */
+            bool safety_ok = pump_controller_safety_check(pump);
+            if (!safety_ok) {
+                safety_warnings++;
+                LOG_WRN("Safety monitor: Safety system check failed (check #%u)", safety_check_count);
+
+                /* Get detailed pump state for diagnostics */
+                struct pump_state_info state_info;
+                int ret = pump_controller_get_state(pump, &state_info);
+                if (ret == 0) {
+                    LOG_WRN("Safety monitor: Pump state - current: %d, previous: %d, safety_active: %d",
+                           state_info.current_state, state_info.previous_state,
+                           state_info.safety_systems_active);
+                }
+            }
+
+            /* Log periodic safety status */
+            static int64_t last_status_log = 0;
+            if (current_time - last_status_log > 30000) {  // Every 30 seconds
+                LOG_INF("Safety monitor: Pump running - runtime: %lld ms, checks: %u, warnings: %u, stops: %u",
+                       runtime_ms, safety_check_count, safety_warnings, emergency_stops);
+                last_status_log = current_time;
+            }
+        } else if (!pump_currently_on) {
+            /* Pump is off - log recovery if we had an emergency stop */
+            if (emergency_stop_active) {
+                emergency_stop_active = false;
+                LOG_INF("Safety monitor: Emergency stop recovery detected - pump is now off");
+            }
+
+            /* Periodic status when pump is off */
+            static int64_t last_off_status = 0;
+            if (current_time - last_off_status > 60000) {  // Every minute
+                LOG_INF("Safety monitor: Pump off - total checks: %u, warnings: %u, emergency stops: %u",
+                       safety_check_count, safety_warnings, emergency_stops);
+                last_off_status = current_time;
+            }
+        }
+
+        /* Update thread health */
         thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-        k_sleep(K_SECONDS(1));
+
+        /* Safety check interval */
+        k_sleep(K_MSEC(CONFIG_SAFETY_MONITOR_CHECK_INTERVAL_MS));
     }
 }
 
