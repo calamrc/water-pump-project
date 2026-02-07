@@ -1,2 +1,5 @@
 # Pump Controller Driver Configuration
 rsource "pump/Kconfig"
+
+# YF-S201C Flow Sensor Driver Configuration
+rsource "sensor/yf_s201c/Kconfig"
