@@ -125,6 +125,11 @@ void yf_s201c_work_handler(struct k_work *work)
 
         data->last_valid_update_ms = k_uptime_get();
         data->state = YF_S201C_RUNNING;
+
+        // Signal semaphore if configured for event-driven operation
+        if (data->data_sem != NULL) {
+            k_sem_give(data->data_sem);
+        }
     } else {
         // Invalid period
         data->consecutive_invalid++;
@@ -205,6 +210,20 @@ static int yf_s201c_init(const struct device *dev)
 /* ============================================================================
  * Public API Implementation
  * ============================================================================ */
+
+int yf_s201c_set_data_semaphore(const struct device *dev, struct k_sem *sem)
+{
+    struct yf_s201c_data *data = dev->data;
+
+    if (data->state == YF_S201C_INIT) {
+        return -ENOTSUP;
+    }
+
+    data->data_sem = sem;
+    LOG_INF("YF-S201C semaphore configured for event-driven operation");
+
+    return 0;
+}
 
 int yf_s201c_get_flow_rate(const struct device *dev, fixed_t *flow_rate)
 {
@@ -323,6 +342,7 @@ int yf_s201c_reset(const struct device *dev)
     \
     static struct yf_s201c_data yf_s201c_data_##inst = { \
         .state = YF_S201C_INIT, \
+        .data_sem = NULL, \
     }; \
     \
     DEVICE_DT_INST_DEFINE(inst, \
