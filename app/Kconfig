@@ -164,6 +164,19 @@ config SAFETY_MONITOR_WARNING_THRESHOLD_MINUTES
 	help
 	  Runtime threshold in minutes when warnings are issued before emergency stop.
 
+config UI_MANAGER_STACK_SIZE
+	int "UI manager thread stack size (bytes)"
+	default 8192
+	help
+	  Stack size for the UI manager thread in bytes.
+
+config UI_MANAGER_PRIORITY
+	int "UI manager thread priority"
+	default 4
+	range 0 15
+	help
+	  Priority of the UI manager thread (lower number = higher priority).
+
 endmenu
 
 endmenu

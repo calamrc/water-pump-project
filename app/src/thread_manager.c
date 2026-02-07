@@ -17,15 +17,17 @@ K_THREAD_STACK_DEFINE(sensor_monitor_stack, CONFIG_SENSOR_MONITOR_STACK_SIZE);
 K_THREAD_STACK_DEFINE(pump_controller_stack, CONFIG_PUMP_CONTROLLER_STACK_SIZE);
 K_THREAD_STACK_DEFINE(safety_monitor_stack, CONFIG_SAFETY_MONITOR_STACK_SIZE);
 K_THREAD_STACK_DEFINE(supervisor_stack, CONFIG_SUPERVISOR_STACK_SIZE);
+K_THREAD_STACK_DEFINE(ui_manager_stack, CONFIG_UI_MANAGER_STACK_SIZE);
 
 /* Thread control blocks */
 static struct k_thread sensor_monitor_thread_cb;
 static struct k_thread pump_controller_thread_cb;
 static struct k_thread safety_monitor_thread_cb;
 static struct k_thread supervisor_thread_cb;
+static struct k_thread ui_manager_thread_cb;
 
 /* Thread health monitoring */
-static struct thread_health_info thread_health[4];
+static struct thread_health_info thread_health[5];
 static int thread_health_count = 0;
 
 /* Message Queue Definition */
@@ -49,6 +51,7 @@ void sensor_monitor_thread(void *arg1, void *arg2, void *arg3);
 void pump_controller_thread(void *arg1, void *arg2, void *arg3);
 void safety_monitor_thread(void *arg1, void *arg2, void *arg3);
 void supervisor_thread(void *arg1, void *arg2, void *arg3);
+void ui_manager_thread(void *arg1, void *arg2, void *arg3);
 
 /**
  * @brief Initialize thread health monitoring for a thread
@@ -116,16 +119,31 @@ static int thread_health_check_all(void)
     int critical_count = 0;
 
     for (int i = 0; i < thread_health_count; i++) {
+        /* Validate thread ID before using it */
+        if (thread_health[i].thread_id == NULL) {
+            LOG_ERR("Thread health entry %d has NULL thread_id", i);
+            unhealthy_count++;
+            continue;
+        }
+        
         int64_t time_since_check = current_time - thread_health[i].last_check_time;
         const char *thread_name = k_thread_name_get(thread_health[i].thread_id);
+        
+        /* Handle case where thread name is NULL */
+        if (thread_name == NULL) {
+            thread_name = "unknown";
+        }
 
         /* Check for timeout */
         if (time_since_check > THREAD_HEALTH_TIMEOUT_MS) {
             thread_health[i].status = THREAD_HEALTH_TIMEOUT;
             unhealthy_count++;
 
-            /* Critical threads get immediate attention */
-            if (strcmp(thread_name, "safety_mon") == 0 || strcmp(thread_name, "pump_ctrl") == 0) {
+            /* Critical threads get immediate attention - check by name safely */
+            bool is_critical = (thread_name != NULL) && 
+                              (strcmp(thread_name, "safety_mon") == 0 || 
+                               strcmp(thread_name, "pump_ctrl") == 0);
+            if (is_critical) {
                 critical_count++;
                 LOG_ERR("CRITICAL: Thread %s health timeout: %lld ms since last check",
                         thread_name, time_since_check);
@@ -234,6 +252,18 @@ int thread_manager_create_all_threads(void)
     k_thread_name_set(&supervisor_thread_cb, "supervisor");
     thread_health_init(supervisor_tid, "supervisor", CONFIG_SUPERVISOR_STACK_SIZE);
 
+    /* Create UI Manager Thread */
+    k_tid_t ui_tid = k_thread_create(&ui_manager_thread_cb, ui_manager_stack,
+                                    K_THREAD_STACK_SIZEOF(ui_manager_stack),
+                                    ui_manager_thread, NULL, NULL, NULL,
+                                    CONFIG_UI_MANAGER_PRIORITY, 0, K_NO_WAIT);
+    if (ui_tid == NULL) {
+        LOG_ERR("Failed to create UI manager thread");
+        return -EAGAIN;
+    }
+    k_thread_name_set(&ui_manager_thread_cb, "ui_manager");
+    thread_health_init(ui_tid, "ui_manager", CONFIG_UI_MANAGER_STACK_SIZE);
+
     LOG_INF("All threads created successfully");
     return 0;
 }
@@ -262,8 +292,10 @@ void thread_manager_monitor_health(void)
         if (current_time - last_summary > 30000) {  // Every 30 seconds
             LOG_INF("Thread health summary:");
             for (int i = 0; i < thread_health_count; i++) {
+                const char *name = k_thread_name_get(thread_health[i].thread_id);
+                if (name == NULL) name = "unknown";
                 LOG_INF("  %s: status=%d, stack_peak=%zu, msgs=%u, errs=%u",
-                       k_thread_name_get(thread_health[i].thread_id),
+                       name,
                        thread_health[i].status,
                        thread_health[i].stack_peak_usage,
                        thread_health[i].messages_processed,
@@ -352,6 +384,9 @@ int thread_manager_shutdown_all_threads(void)
         if (k_thread_join(&supervisor_thread_cb, K_MSEC(100)) != 0) {
             all_exited = false;
         }
+        if (k_thread_join(&ui_manager_thread_cb, K_MSEC(100)) != 0) {
+            all_exited = false;
+        }
 
         if (all_exited) {
             break;
@@ -398,9 +433,11 @@ void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
 
     LOG_INF("Sensor monitor thread ready for data acquisition");
 
+    int64_t last_health_update = k_uptime_get();
+    
     while (!thread_manager_is_shutdown_requested()) {
-        /* Wait for sensor data (preserve existing logic) */
-        if (k_sem_take(&data_sem, K_FOREVER) == 0) {
+        /* Wait for sensor data with timeout to allow periodic health updates */
+        if (k_sem_take(&data_sem, K_MSEC(1000)) == 0) {
             /* Acquire and validate sensor data */
             fixed_t flow_rate;
             ret = yf_s201c_get_flow_rate(flow_sensor, &flow_rate);
@@ -425,6 +462,14 @@ void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
                 }
             } else {
                 LOG_DBG("Invalid sensor data received");
+                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+            }
+            last_health_update = k_uptime_get();
+        } else {
+            /* Timeout - update health even when no data */
+            int64_t now = k_uptime_get();
+            if ((now - last_health_update) >= 1000) {
+                last_health_update = now;
                 thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
             }
         }
@@ -456,6 +501,8 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 
     LOG_INF("Pump controller thread ready for sensor data processing");
 
+    int64_t last_health_update = k_uptime_get();
+
     while (!thread_manager_is_shutdown_requested()) {
         struct sensor_data_msg msg;
 
@@ -467,7 +514,8 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
             timeout_us = MIN(timeout_us, (int64_t)CONFIG_APP_MAX_TIMEOUT_US);
             timeout = K_USEC(timeout_us);
         } else {
-            timeout = K_FOREVER;
+            /* When pump is off, use 1 second timeout to allow periodic health updates */
+            timeout = K_MSEC(1000);
         }
 
         if (k_msgq_get(&sensor_data_msgq, &msg, timeout) == 0) {
@@ -493,6 +541,7 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
                 if (ret < 0) {
                     LOG_ERR("Failed to get current period (%d)", ret);
                     thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 1, 1);
+                    last_health_update = k_uptime_get();
                     continue;
                 }
 
@@ -516,25 +565,40 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
                         LOG_INF("Pump turned on with plateau period: %lld ms", latest_plateau_period);
                         thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
                     }
+                } else {
+                    thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
                 }
+                last_health_update = k_uptime_get();
             } else {
                 /* No plateau detected - pump controller handles timeout internally */
                 thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
+                last_health_update = k_uptime_get();
             }
         } else {
-            /* Timeout occurred - turn off pump (same logic as original main.c) */
-            LOG_INF("Sensor data timeout, turning off pump");
-            int ret = pump_controller_turn_off(pump);
-            if (ret < 0) {
-                LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
-                thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
-            } else {
-                initial_plateau_period = 0;
-                latest_plateau_period = 0;
-                yf_s201c_reset(flow_sensor);
-                flow_analyzer_reset();
+            /* Timeout occurred - could be sensor timeout or just periodic wakeup */
+            if (pump_controller_is_on(pump)) {
+                /* Sensor timeout while pump was on - turn off pump */
+                LOG_INF("Sensor data timeout, turning off pump");
+                int ret = pump_controller_turn_off(pump);
+                if (ret < 0) {
+                    LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
+                    thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
+                } else {
+                    initial_plateau_period = 0;
+                    latest_plateau_period = 0;
+                    yf_s201c_reset(flow_sensor);
+                    flow_analyzer_reset();
                 LOG_INF("Pump turned off due to sensor timeout");
                 thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+                last_health_update = k_uptime_get();
+                }
+            } else {
+                /* Periodic wakeup when pump is off - update health */
+                int64_t now = k_uptime_get();
+                if ((now - last_health_update) >= 1000) {
+                    last_health_update = now;
+                    thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+                }
             }
         }
     }
@@ -696,8 +760,10 @@ void supervisor_thread(void *arg1, void *arg2, void *arg3)
             /* Log detailed thread health status */
             for (int i = 0; i < thread_health_count; i++) {
                 if (thread_health[i].status != THREAD_HEALTH_OK) {
+                    const char *name = k_thread_name_get(thread_health[i].thread_id);
+                    if (name == NULL) name = "unknown";
                     LOG_WRN("Supervisor: Thread %s health: %d, last check: %lld ms ago",
-                           k_thread_name_get(thread_health[i].thread_id),
+                           name,
                            thread_health[i].status,
                            current_time - thread_health[i].last_check_time);
                 }
@@ -748,8 +814,10 @@ void supervisor_thread(void *arg1, void *arg2, void *arg3)
             /* Detailed thread statistics */
             LOG_INF("Supervisor: Thread statistics:");
             for (int i = 0; i < thread_health_count; i++) {
+                const char *name = k_thread_name_get(thread_health[i].thread_id);
+                if (name == NULL) name = "unknown";
                 LOG_INF("  %s: msgs=%u, errs=%u, stack_peak=%zu B",
-                       k_thread_name_get(thread_health[i].thread_id),
+                       name,
                        thread_health[i].messages_processed,
                        thread_health[i].errors_encountered,
                        thread_health[i].stack_peak_usage);

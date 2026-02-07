@@ -4,8 +4,13 @@
 
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
 
 &gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
 	status = "okay";
 };
 
@@ -33,14 +38,14 @@
 / {
 	pump_controller: pump_controller {
 		compatible = "aygu,pump-controller";
-		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;   /* Changed from ACTIVE_HIGH - relay may need LOW to activate */
+		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
 		safety-timeout-min = <5>;
 		status = "okay";
 	};
 
 	flow_sensor: flow-sensor {
 		compatible = "aygu,yf-s201c";
-		gpios = <&gpio0 18 GPIO_PULL_UP>;  /* Input with pull-up */
+		gpios = <&gpio0 18 GPIO_PULL_UP>;
 		pulses-per-liter = <450>;
 		min-period-us = <100>;
 		buffer-size = <5>;
@@ -57,5 +62,16 @@
 		sample-time-us = <2000>;
 		idle-timeout-ms = <200>;
 		status = "okay";
+	};
+
+	/* GPIO Keys for EC11 Button */
+	gpio_keys: gpio_keys {
+		compatible = "gpio-keys";
+		
+		ec11_button: ec11_button {
+			label = "EC11 Button";
+			gpios = <&gpio0 26 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_ENTER>;
+		};
 	};
 };
