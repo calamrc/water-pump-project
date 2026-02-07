@@ -3,6 +3,7 @@
  */
 
 #include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
 
 &gpio0 {
 	status = "okay";
@@ -45,6 +46,16 @@
 		buffer-size = <5>;
 		stale-threshold-ms = <200>;
 		consecutive-invalid-threshold = <5>;
+		status = "okay";
+	};
+
+	qdec: qdec {
+		compatible = "gpio-qdec";
+		gpios = <&gpio0 25 GPIO_PULL_UP>, <&gpio1 33 GPIO_PULL_UP>;
+		steps-per-period = <4>;
+		zephyr,axis = <INPUT_REL_WHEEL>;
+		sample-time-us = <2000>;
+		idle-timeout-ms = <200>;
 		status = "okay";
 	};
 };
