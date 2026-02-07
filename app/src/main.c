@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <app/drivers/pump_controller.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
@@ -11,10 +12,9 @@
 #include <string.h>
 #include <math.h>
 #include "fixed_math.h"
-#include "sensor_manager.h"
-#include "flow_analyzer.h"
-#include "pump_controller.h"
 #include "error_handler.h"
+#include "flow_analyzer.h"
+#include "sensor_manager.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
@@ -78,15 +78,15 @@ int main(void)
         return ERROR_REPORT_CRITICAL(ERROR_FLOW_CALCULATION_ERROR);
     }
 
-    // Initialize pump controller
-    ret = pump_controller_init();
-    if (ret < 0) {
-        LOG_ERR("Could not initialize pump controller (%d)", ret);
+    // Get pump controller device reference (driver initializes itself)
+    const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
+    if (!PUMP_CONTROLLER_DT_CHECK(DT_NODELABEL(pump_controller))) {
+        LOG_ERR("Pump controller device not ready");
         return ERROR_REPORT_CRITICAL(ERROR_PUMP_GPIO_FAILED);
     }
 
     while (1) {
-        bool current_pump_on = pump_controller_is_on();
+        bool current_pump_on = pump_controller_is_on(pump);
 
         LOG_DBG("Waiting on semaphore (pump_on: %d)", current_pump_on);
 
@@ -105,7 +105,7 @@ int main(void)
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
             if (sensor_manager_is_data_valid()) {
-                bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed, !pump_controller_is_on() ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR);
+                bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed, !pump_controller_is_on(pump) ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR);
 
                 if (plateau_detected) {
                     LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
@@ -118,11 +118,11 @@ int main(void)
                         latest_plateau_period = current_period;
                     }
 
-                    pump_controller_update_plateau_period(latest_plateau_period);
+                    pump_controller_update_plateau_period(pump, latest_plateau_period);
                     flow_analyzer_reset();
 
-                    if (!pump_controller_is_on() && current_period > 0) {
-                        ret = pump_controller_turn_on(latest_plateau_period);
+                    if (!pump_controller_is_on(pump) && current_period > 0) {
+                        ret = pump_controller_turn_on(pump, latest_plateau_period);
                         if (ret < 0) {
                             LOG_ERR("Failed to turn on pump (%d)", ret);
                         } else {
@@ -139,9 +139,9 @@ int main(void)
             sensor_manager_reset();
             flow_analyzer_reset();
 
-            if (pump_controller_is_on()) {
+            if (pump_controller_is_on(pump)) {
                 LOG_INF("Plateau period expired, turning off pump");
-                ret = pump_controller_turn_off();
+                ret = pump_controller_turn_off(pump);
                 if (ret < 0) {
                     LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
                 } else {

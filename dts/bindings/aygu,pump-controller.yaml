@@ -1,0 +1,16 @@
+description: Aygu Pump Controller Driver
+
+compatible: "aygu,pump-controller"
+
+include: base.yaml
+
+properties:
+  relay-gpios:
+    type: phandle-array
+    required: true
+    description: GPIO for pump relay control
+
+  safety-timeout-min:
+    type: int
+    default: 5
+    description: Safety timeout in minutes before automatic pump shutdown

@@ -5,3 +5,12 @@
 &gpio0 {
 	status = "okay";
 };
+
+/ {
+	pump_controller: pump_controller {
+		compatible = "aygu,pump-controller";
+		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+		safety-timeout-min = <5>;
+		status = "okay";
+	};
+};
