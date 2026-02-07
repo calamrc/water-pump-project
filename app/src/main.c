@@ -18,6 +18,9 @@
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
+// Semaphore for event-driven sensor data signaling
+K_SEM_DEFINE(data_sem, 0, 1);
+
 // Configuration constants
 #define FLOW_THRESHOLD_L_PER_MIN 0.1f // Minimum flow rate to consider active
 #define PUMP_ON_DEBOUNCE_MS 3000 // Delay in ms before allowing pump to turn on
@@ -64,6 +67,13 @@ int main(void)
         return ERROR_REPORT_CRITICAL(ERROR_SENSOR_INIT_FAILED);
     }
 
+    // Configure sensor for event-driven operation
+    ret = yf_s201c_set_data_semaphore(flow_sensor, &data_sem);
+    if (ret < 0) {
+        LOG_ERR("Could not configure sensor semaphore (%d)", ret);
+        return ERROR_REPORT_CRITICAL(ERROR_SENSOR_INIT_FAILED);
+    }
+
     // Initialize flow analyzer
     ret = flow_analyzer_init();
     if (ret < 0) {
@@ -81,35 +91,16 @@ int main(void)
     while (1) {
         bool current_pump_on = pump_controller_is_on(pump);
 
-        LOG_DBG("Polling for data (pump_on: %d)", current_pump_on);
+        LOG_DBG("Waiting on semaphore (pump_on: %d)", current_pump_on);
 
         int64_t start_wait_ms = k_uptime_get();
-        int64_t timeout_ms = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5 / 1000);
-        bool data_received = false;
+        int64_t timeout_us = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5);
+        k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, MAX_TIMEOUT_US));
 
-        // Poll for valid data
-        while (true) {
-            k_msleep(100);
-
-            if (yf_s201c_is_data_valid(flow_sensor)) {
-                data_received = true;
-                break;
-            }
-
-            if (current_pump_on && timeout_ms > 0 && k_uptime_get() - start_wait_ms > timeout_ms) {
-                break;
-            }
-
-            if (!current_pump_on && timeout_ms < 0) {
-                // Keep polling indefinitely when pump off
-                continue;
-            }
-        }
-
-        if (data_received) {
+        if (k_sem_take(&data_sem, timeout) == 0) {
             int64_t end_wait_ms = k_uptime_get();
 
-            LOG_DBG("Data received after %lld ms", end_wait_ms - start_wait_ms);
+            LOG_DBG("Semaphore taken after %lld ms", end_wait_ms - start_wait_ms);
 
             fixed_t flow_rate_fixed;
             ret = yf_s201c_get_flow_rate(flow_sensor, &flow_rate_fixed);

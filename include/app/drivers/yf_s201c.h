@@ -54,4 +54,15 @@ int yf_s201c_get_current_period(const struct device *dev, int64_t *period_us);
  */
 int yf_s201c_reset(const struct device *dev);
 
+/**
+ * @brief Set the semaphore to signal when valid data becomes available
+ *
+ * This enables event-driven operation instead of polling.
+ *
+ * @param dev Device instance
+ * @param sem Semaphore to signal (NULL to disable signaling)
+ * @return 0 on success, negative error code on failure
+ */
+int yf_s201c_set_data_semaphore(const struct device *dev, struct k_sem *sem);
+
 #endif /* ZEPHYR_INCLUDE_APP_DRIVERS_YF_S201C_H_ */

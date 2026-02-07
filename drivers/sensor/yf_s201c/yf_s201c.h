@@ -47,6 +47,7 @@ struct yf_s201c_data {
     struct gpio_callback gpio_cb;
     struct k_work work;
     struct k_mutex mutex;
+    struct k_sem *data_sem;  /* Semaphore to signal when data is ready */
 
     /* State machine */
     enum yf_s201c_state state;
@@ -80,5 +81,21 @@ struct yf_s201c_data {
 
 void yf_s201c_isr(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins);
 void yf_s201c_work_handler(struct k_work *work);
+
+/* ============================================================================
+ * Public API for Semaphore Configuration
+ * ============================================================================ */
+
+/**
+ * @brief Set the semaphore to signal when valid data becomes available
+ *
+ * This enables event-driven operation instead of polling.
+ * Must be called after device initialization but before normal operation.
+ *
+ * @param dev Device instance
+ * @param sem Semaphore to signal (NULL to disable signaling)
+ * @return 0 on success, negative error code on failure
+ */
+int yf_s201c_set_data_semaphore(const struct device *dev, struct k_sem *sem);
 
 #endif /* ZEPHYR_DRIVERS_SENSOR_YF_S201C_YF_S201C_H_ */
