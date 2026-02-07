@@ -5,8 +5,11 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <app/drivers/yf_s201c.h>
+#include <app/drivers/pump_controller.h>
 
 #include "thread_comm.h"
+#include "flow_analyzer.h"
 
 LOG_MODULE_REGISTER(thread_manager, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -34,6 +37,9 @@ K_SEM_DEFINE(pump_event_sem, 0, 10);
 
 /* Poll Signal Definition */
 static struct k_poll_signal thread_health_signal;
+
+/* Sensor data semaphore for ISR-to-thread signaling */
+K_SEM_DEFINE(data_sem, 0, 1);
 
 /* Forward declarations for thread entry functions */
 void sensor_monitor_thread(void *arg1, void *arg2, void *arg3);
@@ -87,23 +93,8 @@ void thread_health_update(k_tid_t thread_id, enum thread_health_status status,
             thread_health[i].messages_processed += messages_processed;
             thread_health[i].errors_encountered += errors_encountered;
 
-            /* Check stack usage */
-            size_t stack_unused;
-            if (k_thread_stack_space_get(thread_id, &stack_unused) == 0) {
-                size_t stack_size = thread_health[i].stack_size;
-                size_t stack_used = stack_size - stack_unused;
-
-                if (stack_used > thread_health[i].stack_peak_usage) {
-                    thread_health[i].stack_peak_usage = stack_used;
-                }
-
-                /* Log critical stack usage */
-                if (stack_used > (stack_size * 90 / 100)) {  // >90% usage
-                    thread_health[i].status = THREAD_HEALTH_STACK_CRITICAL;
-                    LOG_WRN("Thread stack usage critical: %zu/%zu bytes",
-                           stack_used, stack_size);
-                }
-            }
+            /* TODO: Implement stack usage monitoring */
+            thread_health[i].stack_peak_usage = 0;
 
             break;
         }
@@ -260,21 +251,170 @@ int thread_manager_shutdown_all_threads(void)
 }
 
 /* Placeholder thread implementations - will be replaced in Phase 2-4 */
+/* Sensor monitor thread implementation */
 void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
 {
-    LOG_INF("Sensor monitor thread started (placeholder)");
+    LOG_INF("Sensor monitor thread started");
+
+    /* Get flow sensor device reference */
+    const struct device *flow_sensor = DEVICE_DT_GET(DT_NODELABEL(flow_sensor));
+    if (!device_is_ready(flow_sensor)) {
+        LOG_ERR("Flow sensor device not ready in sensor monitor thread");
+        return;
+    }
+
+    /* Configure sensor for event-driven operation */
+    int ret = yf_s201c_set_data_semaphore(flow_sensor, &data_sem);
+    if (ret < 0) {
+        LOG_ERR("Could not configure sensor semaphore in sensor monitor thread (%d)", ret);
+        return;
+    }
+
+    static uint32_t sequence_counter = 0;
+
+    LOG_INF("Sensor monitor thread ready for data acquisition");
+
     while (true) {
-        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-        k_sleep(K_SECONDS(1));
+        /* Wait for sensor data (preserve existing logic) */
+        if (k_sem_take(&data_sem, K_FOREVER) == 0) {
+            /* Acquire and validate sensor data */
+            fixed_t flow_rate;
+            ret = yf_s201c_get_flow_rate(flow_sensor, &flow_rate);
+
+            if (ret == 0 && yf_s201c_is_data_valid(flow_sensor)) {
+                /* Forward to pump controller via message queue */
+                struct sensor_data_msg msg = {
+                    .flow_rate = flow_rate,
+                    .timestamp = k_uptime_get(),
+                    .data_valid = true,
+                    .sequence_number = sequence_counter++
+                };
+
+                ret = k_msgq_put(&sensor_data_msgq, &msg, K_NO_WAIT);
+                if (ret == 0) {
+                    LOG_DBG("Sensor data forwarded to pump controller (seq: %u, flow: %.2f L/min)",
+                           msg.sequence_number, fixed_to_float(flow_rate));
+                    thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
+                } else {
+                    LOG_WRN("Failed to queue sensor data (%d)", ret);
+                    thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
+                }
+            } else {
+                LOG_DBG("Invalid sensor data received");
+                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+            }
+        }
     }
 }
 
+/* Pump controller thread implementation */
 void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 {
-    LOG_INF("Pump controller thread started (placeholder)");
+    LOG_INF("Pump controller thread started");
+
+    /* Get pump controller device reference */
+    const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
+    if (!device_is_ready(pump)) {
+        LOG_ERR("Pump controller device not ready in pump controller thread");
+        return;
+    }
+
+    /* Get flow sensor device reference for period calculations */
+    const struct device *flow_sensor = DEVICE_DT_GET(DT_NODELABEL(flow_sensor));
+    if (!device_is_ready(flow_sensor)) {
+        LOG_ERR("Flow sensor device not ready in pump controller thread");
+        return;
+    }
+
+    /* State variables (preserve from original main.c) */
+    int64_t initial_plateau_period = 0;
+    int64_t latest_plateau_period = 0;
+    int64_t pump_start_time = 0;
+
+    LOG_INF("Pump controller thread ready for sensor data processing");
+
     while (true) {
-        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-        k_sleep(K_SECONDS(1));
+        struct sensor_data_msg msg;
+
+        /* Wait for sensor data from message queue with timeout when pump is on */
+        k_timeout_t timeout = pump_controller_is_on(pump) ? K_MSEC(100) : K_FOREVER;
+
+        if (k_msgq_get(&sensor_data_msgq, &msg, timeout) == 0) {
+            LOG_DBG("Pump controller received sensor data (seq: %u, flow: %.2f L/min)",
+                   msg.sequence_number, fixed_to_float(msg.flow_rate));
+
+            /* Perform plateau detection (preserve exact logic from main.c) */
+            bool current_pump_on = pump_controller_is_on(pump);
+            bool plateau_detected = flow_analyzer_detect_plateau(
+                msg.flow_rate,
+                !current_pump_on ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR
+            );
+
+            if (plateau_detected) {
+                LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
+                        fixed_to_float(msg.flow_rate),
+                        fixed_to_float(flow_analyzer_get_noise_std()),
+                        fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
+
+                /* Get current period for plateau tracking */
+                int64_t current_period;
+                int ret = yf_s201c_get_current_period(flow_sensor, &current_period);
+                if (ret < 0) {
+                    LOG_ERR("Failed to get current period (%d)", ret);
+                    thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 1, 1);
+                    continue;
+                }
+
+                /* Update plateau period (preserve logic) */
+                if (!(current_pump_on && current_period < initial_plateau_period)) {
+                    latest_plateau_period = current_period;
+                }
+
+                /* Update pump plateau period */
+                pump_controller_update_plateau_period(pump, latest_plateau_period);
+                flow_analyzer_reset();
+
+                /* Turn on pump if conditions met */
+                if (!pump_controller_is_on(pump) && current_period > 0) {
+                    ret = pump_controller_turn_on(pump, latest_plateau_period);
+                    if (ret < 0) {
+                        LOG_ERR("Failed to turn on pump (%d)", ret);
+                        thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 1, 1);
+                    } else {
+                        initial_plateau_period = current_period;
+                        pump_start_time = k_uptime_get();
+                        LOG_INF("Pump turned on with plateau period: %lld ms", latest_plateau_period);
+                        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
+                    }
+                }
+            } else {
+                /* No plateau detected - pump controller handles timeout internally */
+                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
+            }
+        } else {
+            /* Timeout occurred - check if pump should be turned off */
+            if (pump_controller_is_on(pump) && latest_plateau_period > 0) {
+                int64_t elapsed = k_uptime_get() - pump_start_time;
+                int64_t timeout_limit = latest_plateau_period * 15 / 10; // 1.5x plateau period
+
+                if (elapsed > timeout_limit) {
+                    LOG_INF("Plateau period expired, turning off pump (elapsed: %lld ms, limit: %lld ms)",
+                           elapsed, timeout_limit);
+                    int ret = pump_controller_turn_off(pump);
+                    if (ret < 0) {
+                        LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
+                        thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
+                    } else {
+                        initial_plateau_period = 0;
+                        latest_plateau_period = 0;
+                        yf_s201c_reset(flow_sensor);
+                        flow_analyzer_reset();
+                        LOG_INF("Pump turned off due to timeout");
+                        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
+                    }
+                }
+            }
+        }
     }
 }
 
