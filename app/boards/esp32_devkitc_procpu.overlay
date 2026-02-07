@@ -9,7 +9,7 @@
 / {
 	pump_controller: pump_controller {
 		compatible = "aygu,pump-controller";
-		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;   /* Changed from ACTIVE_HIGH - relay may need LOW to activate */
 		safety-timeout-min = <5>;
 		status = "okay";
 	};
