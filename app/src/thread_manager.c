@@ -38,6 +38,10 @@ K_SEM_DEFINE(pump_event_sem, 0, 10);
 /* Poll Signal Definition */
 static struct k_poll_signal thread_health_signal;
 
+/* Shutdown coordination */
+static bool system_shutdown_requested = false;
+static struct k_sem shutdown_sem;
+
 /* Sensor data semaphore for ISR-to-thread signaling */
 K_SEM_DEFINE(data_sem, 0, 1);
 
@@ -102,27 +106,70 @@ void thread_health_update(k_tid_t thread_id, enum thread_health_status status,
 }
 
 /**
- * @brief Check health of all monitored threads
+ * @brief Check health of all monitored threads and attempt recovery
  *
- * @return 0 if all threads healthy, negative errno if issues found
+ * @return 0 if all threads healthy, negative errno on failure
  */
 static int thread_health_check_all(void)
 {
     int64_t current_time = k_uptime_get();
     int unhealthy_count = 0;
+    int critical_count = 0;
 
     for (int i = 0; i < thread_health_count; i++) {
         int64_t time_since_check = current_time - thread_health[i].last_check_time;
+        const char *thread_name = k_thread_name_get(thread_health[i].thread_id);
 
+        /* Check for timeout */
         if (time_since_check > THREAD_HEALTH_TIMEOUT_MS) {
             thread_health[i].status = THREAD_HEALTH_TIMEOUT;
             unhealthy_count++;
-            LOG_ERR("Thread health timeout: %lld ms since last check",
-                   time_since_check);
+
+            /* Critical threads get immediate attention */
+            if (strcmp(thread_name, "safety_mon") == 0 || strcmp(thread_name, "pump_ctrl") == 0) {
+                critical_count++;
+                LOG_ERR("CRITICAL: Thread %s health timeout: %lld ms since last check",
+                        thread_name, time_since_check);
+            } else {
+                LOG_WRN("Thread %s health timeout: %lld ms since last check",
+                        thread_name, time_since_check);
+            }
+        }
+
+        /* Check for stack usage issues */
+        if (thread_health[i].stack_peak_usage > thread_health[i].stack_size * 90 / 100) {
+            thread_health[i].status = THREAD_HEALTH_STACK_CRITICAL;
+            unhealthy_count++;
+            LOG_WRN("Thread %s stack usage critical: %zu/%zu bytes (%.1f%%)",
+                   thread_name,
+                   thread_health[i].stack_peak_usage,
+                   thread_health[i].stack_size,
+                   (float)thread_health[i].stack_peak_usage * 100 / thread_health[i].stack_size);
+        }
+
+        /* Check for excessive error rates */
+        if (thread_health[i].errors_encountered > 10) {
+            LOG_WRN("Thread %s has high error count: %u errors",
+                   thread_name, thread_health[i].errors_encountered);
         }
     }
 
-    return unhealthy_count == 0 ? 0 : -ETIMEDOUT;
+    /* Recovery strategies for critical issues */
+    if (critical_count > 0) {
+        LOG_ERR("CRITICAL: %d critical threads unhealthy - initiating emergency procedures", critical_count);
+
+        /* Emergency: Force pump off if pump controller is unresponsive */
+        const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
+        if (device_is_ready(pump) && pump_controller_is_on(pump)) {
+            LOG_ERR("Emergency: Forcing pump off due to critical thread failure");
+            int ret = pump_controller_emergency_stop(pump);
+            if (ret < 0) {
+                LOG_ERR("Emergency stop failed: %d", ret);
+            }
+        }
+    }
+
+    return (unhealthy_count == 0) ? 0 : (critical_count > 0 ? -ECANCELED : -ETIMEDOUT);
 }
 
 /**
@@ -136,6 +183,9 @@ int thread_manager_create_all_threads(void)
 
     /* Initialize thread communication primitives */
     k_poll_signal_init(&thread_health_signal);
+
+    /* Initialize shutdown semaphore */
+    k_sem_init(&shutdown_sem, 0, 1);
 
     /* Create Sensor Monitor Thread */
     k_tid_t sensor_tid = k_thread_create(&sensor_monitor_thread_cb, sensor_monitor_stack,
@@ -228,6 +278,29 @@ void thread_manager_monitor_health(void)
     }
 }
 
+int thread_manager_request_shutdown(void)
+{
+    if (system_shutdown_requested) {
+        return -EALREADY;
+    }
+
+    system_shutdown_requested = true;
+    k_sem_give(&shutdown_sem);
+
+    LOG_INF("System shutdown requested");
+    return 0;
+}
+
+/**
+ * @brief Check if shutdown has been requested
+ *
+ * @return true if shutdown requested, false otherwise
+ */
+bool thread_manager_is_shutdown_requested(void)
+{
+    return system_shutdown_requested;
+}
+
 /**
  * @brief Gracefully shutdown all threads
  *
@@ -235,18 +308,70 @@ void thread_manager_monitor_health(void)
  */
 int thread_manager_shutdown_all_threads(void)
 {
-    LOG_INF("Shutting down all threads...");
+    LOG_INF("Initiating graceful system shutdown...");
 
-    /* Signal threads to exit (implementation depends on thread design) */
-    /* TODO: Implement proper thread shutdown signaling */
+    /* Signal shutdown to all threads */
+    system_shutdown_requested = true;
+    k_sem_give(&shutdown_sem);
 
-    /* Wait for threads to exit */
-    k_thread_join(&sensor_monitor_thread_cb, K_SECONDS(5));
-    k_thread_join(&pump_controller_thread_cb, K_SECONDS(5));
-    k_thread_join(&safety_monitor_thread_cb, K_SECONDS(5));
-    k_thread_join(&supervisor_thread_cb, K_SECONDS(5));
+    /* Give threads time to acknowledge shutdown */
+    k_sleep(K_MSEC(500));
 
-    LOG_INF("All threads shut down");
+    /* Ensure pump is safely off before shutdown */
+    const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
+    if (device_is_ready(pump) && pump_controller_is_on(pump)) {
+        LOG_INF("Shutdown: Ensuring pump is safely off");
+        int ret = pump_controller_turn_off(pump);
+        if (ret < 0) {
+            LOG_WRN("Shutdown: Failed to turn off pump gracefully (%d), using emergency stop", ret);
+            ret = pump_controller_emergency_stop(pump);
+            if (ret < 0) {
+                LOG_ERR("Shutdown: Emergency stop also failed (%d)", ret);
+            }
+        }
+    }
+
+    /* Wait for threads to exit with timeout */
+    LOG_INF("Waiting for threads to exit...");
+
+    int timeout_count = 0;
+    const int max_timeouts = 10;  // 5 seconds total
+
+    while (timeout_count < max_timeouts) {
+        bool all_exited = true;
+
+        /* Check if threads are still running */
+        if (k_thread_join(&sensor_monitor_thread_cb, K_MSEC(100)) != 0) {
+            all_exited = false;
+        }
+        if (k_thread_join(&pump_controller_thread_cb, K_MSEC(100)) != 0) {
+            all_exited = false;
+        }
+        if (k_thread_join(&safety_monitor_thread_cb, K_MSEC(100)) != 0) {
+            all_exited = false;
+        }
+        if (k_thread_join(&supervisor_thread_cb, K_MSEC(100)) != 0) {
+            all_exited = false;
+        }
+
+        if (all_exited) {
+            break;
+        }
+
+        timeout_count++;
+        LOG_INF("Shutdown: Waiting for threads to exit (%d/%d)...", timeout_count, max_timeouts);
+    }
+
+    if (timeout_count >= max_timeouts) {
+        LOG_WRN("Shutdown: Some threads did not exit gracefully within timeout");
+    } else {
+        LOG_INF("Shutdown: All threads exited gracefully");
+    }
+
+    /* Final cleanup */
+    system_shutdown_requested = false;
+
+    LOG_INF("System shutdown complete");
     return 0;
 }
 
@@ -274,7 +399,7 @@ void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
 
     LOG_INF("Sensor monitor thread ready for data acquisition");
 
-    while (true) {
+    while (!thread_manager_is_shutdown_requested()) {
         /* Wait for sensor data (preserve existing logic) */
         if (k_sem_take(&data_sem, K_FOREVER) == 0) {
             /* Acquire and validate sensor data */
@@ -332,7 +457,7 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 
     LOG_INF("Pump controller thread ready for sensor data processing");
 
-    while (true) {
+    while (!thread_manager_is_shutdown_requested()) {
         struct sensor_data_msg msg;
 
         /* Wait for sensor data from message queue with timeout when pump is on */
@@ -439,7 +564,7 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
            CONFIG_SAFETY_MONITOR_MAX_RUNTIME_MINUTES,
            CONFIG_SAFETY_MONITOR_CHECK_INTERVAL_MS);
 
-    while (true) {
+    while (!thread_manager_is_shutdown_requested()) {
         int64_t current_time = k_uptime_get();
         bool pump_currently_on = pump_controller_is_on(pump);
 
@@ -538,9 +663,109 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 
 void supervisor_thread(void *arg1, void *arg2, void *arg3)
 {
-    LOG_INF("Supervisor thread started (placeholder)");
-    while (true) {
-        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-        k_sleep(K_SECONDS(1));
+    LOG_INF("Supervisor thread started - system coordination and monitoring");
+
+    /* Supervisor state tracking */
+    int64_t system_start_time = k_uptime_get();
+    uint32_t system_health_checks = 0;
+    uint32_t system_warnings = 0;
+    uint32_t system_errors = 0;
+    bool system_stable = true;
+
+    /* System coordination state */
+    struct {
+        bool sensor_monitor_active;
+        bool pump_controller_active;
+        bool safety_monitor_active;
+        int64_t last_coordination_check;
+    } coordination_state = {false, false, false, 0};
+
+    LOG_INF("Supervisor thread ready for system coordination");
+
+    while (!thread_manager_is_shutdown_requested()) {
+        int64_t current_time = k_uptime_get();
+        system_health_checks++;
+
+        /* System health assessment */
+        int health_status = thread_health_check_all();
+        if (health_status != 0) {
+            system_warnings++;
+            system_stable = false;
+            LOG_WRN("Supervisor: System health issues detected (check #%u, warnings: %u)",
+                   system_health_checks, system_warnings);
+
+            /* Log detailed thread health status */
+            for (int i = 0; i < thread_health_count; i++) {
+                if (thread_health[i].status != THREAD_HEALTH_OK) {
+                    LOG_WRN("Supervisor: Thread %s health: %d, last check: %lld ms ago",
+                           k_thread_name_get(thread_health[i].thread_id),
+                           thread_health[i].status,
+                           current_time - thread_health[i].last_check_time);
+                }
+            }
+        } else {
+            /* System is healthy */
+            if (!system_stable) {
+                system_stable = true;
+                LOG_INF("Supervisor: System health restored (check #%u)", system_health_checks);
+            }
+        }
+
+        /* Thread coordination and status monitoring */
+        if (current_time - coordination_state.last_coordination_check > 10000) {  // Every 10 seconds
+            coordination_state.last_coordination_check = current_time;
+
+            /* Check thread activity indicators */
+            bool sensor_active = (thread_health[0].messages_processed > 0);  // Sensor monitor
+            bool pump_active = (thread_health[1].messages_processed > 0);    // Pump controller
+            bool safety_active = (thread_health[2].errors_encountered >= 0); // Safety monitor (always active)
+
+            /* Detect thread state changes */
+            if (sensor_active != coordination_state.sensor_monitor_active) {
+                coordination_state.sensor_monitor_active = sensor_active;
+                LOG_INF("Supervisor: Sensor monitor activity: %s", sensor_active ? "ACTIVE" : "QUIET");
+            }
+
+            if (pump_active != coordination_state.pump_controller_active) {
+                coordination_state.pump_controller_active = pump_active;
+                LOG_INF("Supervisor: Pump controller activity: %s", pump_active ? "ACTIVE" : "QUIET");
+            }
+
+            if (safety_active != coordination_state.safety_monitor_active) {
+                coordination_state.safety_monitor_active = safety_active;
+                LOG_INF("Supervisor: Safety monitor activity: %s", safety_active ? "ACTIVE" : "QUIET");
+            }
+        }
+
+        /* System status reporting */
+        static int64_t last_status_report = 0;
+        if (current_time - last_status_report > 60000) {  // Every minute
+            int64_t uptime_minutes = (current_time - system_start_time) / 60000;
+
+            LOG_INF("Supervisor: System status - Uptime: %lld min, Checks: %u, Warnings: %u, Errors: %u, Stable: %s",
+                   uptime_minutes, system_health_checks, system_warnings, system_errors,
+                   system_stable ? "YES" : "NO");
+
+            /* Detailed thread statistics */
+            LOG_INF("Supervisor: Thread statistics:");
+            for (int i = 0; i < thread_health_count; i++) {
+                LOG_INF("  %s: msgs=%u, errs=%u, stack_peak=%zu B",
+                       k_thread_name_get(thread_health[i].thread_id),
+                       thread_health[i].messages_processed,
+                       thread_health[i].errors_encountered,
+                       thread_health[i].stack_peak_usage);
+            }
+
+            last_status_report = current_time;
+        }
+
+        /* System event handling and coordination */
+        /* TODO: Add system event handling (shutdown requests, configuration updates, etc.) */
+
+        /* Update supervisor health */
+        thread_health_update(k_current_get(), system_stable ? THREAD_HEALTH_OK : THREAD_HEALTH_ERROR, 0, 0);
+
+        /* Supervisor check interval - less frequent than safety monitor */
+        k_sleep(K_MSEC(2000));  // 2 second intervals
     }
 }
