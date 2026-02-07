@@ -1,14 +1,16 @@
-#-------------------------------------------------------------------------------
-# Zephyr Example Application
-#
 # Copyright (c) 2025 Ramon Cristopher Calam
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.13.1)
+cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(app LANGUAGES C)
 
 target_include_directories(app PRIVATE include)
 
-target_sources(app PRIVATE src/main.c src/flow_analyzer.c src/error_handler.c src/thread_manager.c)
+target_sources(app PRIVATE
+  src/main.c
+  src/flow_analyzer.c
+  src/error_handler.c
+  src/thread_manager.c
+)
