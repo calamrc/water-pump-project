@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-#include <app/drivers/yf_s201c.h>
 #include <app/drivers/pump_controller.h>
-
+#include <app/drivers/yf_s201c.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include "thread_comm.h"
 #include "flow_analyzer.h"
 

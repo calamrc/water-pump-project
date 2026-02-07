@@ -7,11 +7,8 @@
 #include <app/drivers/yf_s201c.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
 #include <app_version.h>
-#include <string.h>
-#include <math.h>
 #include "fixed_math.h"
 #include "error_handler.h"
 #include "flow_analyzer.h"
@@ -28,8 +25,6 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
  */
 int main(void)
 {
-    int64_t initial_plateau_period = 0;
-    int64_t latest_plateau_period = 0;
     int ret;
 
     LOG_INF("Zephyr Water Pump Application %s", APP_VERSION_STRING);

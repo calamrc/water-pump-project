@@ -6,7 +6,6 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
-
 #include "pump_controller.h"
 
 LOG_MODULE_REGISTER(pump_controller);

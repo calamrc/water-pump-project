@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <string.h>
-
-LOG_MODULE_REGISTER(flow_analyzer);
-
 #include "flow_analyzer.h"
 #include "fixed_math.h"
+
+LOG_MODULE_REGISTER(flow_analyzer);
 
 /* ============================================================================
  * Module Variables (Static to module)

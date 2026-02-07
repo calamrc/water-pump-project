@@ -8,7 +8,6 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
 #include <string.h>
-
 #include "yf_s201c.h"
 
 #define DT_DRV_COMPAT aygu_yf_s201c
