@@ -103,7 +103,6 @@ static int execute_safety_check(safety_check_type_t check_type,
     result->check_type = check_type;
     result->timestamp = k_uptime_get_32();
 
-    k_timeout_t timeout = K_MSEC(safety_ctx.config.check_interval_ms / 2);
     int64_t start_time = k_uptime_get();
 
     /* Execute the check callback */
