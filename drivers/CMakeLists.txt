@@ -1,2 +1,3 @@
 # Drivers subdirectory build configuration
 add_subdirectory_ifdef(CONFIG_PUMP_CONTROLLER pump)
+add_subdirectory_ifdef(CONFIG_YF_S201C sensor)

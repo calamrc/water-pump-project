@@ -13,4 +13,15 @@
 		safety-timeout-min = <5>;
 		status = "okay";
 	};
+
+	flow_sensor: flow-sensor {
+		compatible = "aygu,yf-s201c";
+		gpios = <&gpio0 18 GPIO_PULL_UP>;  /* Input with pull-up */
+		pulses-per-liter = <450>;
+		min-period-us = <100>;
+		buffer-size = <5>;
+		stale-threshold-ms = <200>;
+		consecutive-invalid-threshold = <5>;
+		status = "okay";
+	};
 };

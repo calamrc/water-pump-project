@@ -1,0 +1,1 @@
+zephyr_library_sources(yf_s201c.c)

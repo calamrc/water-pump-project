@@ -4,6 +4,7 @@
  */
 
 #include <app/drivers/pump_controller.h>
+#include <app/drivers/yf_s201c.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
@@ -14,7 +15,6 @@
 #include "fixed_math.h"
 #include "error_handler.h"
 #include "flow_analyzer.h"
-#include "sensor_manager.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
@@ -35,7 +35,7 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 #define ERROR_INIT_RETRY_COUNT 3
 #define ERROR_INIT_RETRY_DELAY_MS 100
 
-K_SEM_DEFINE(data_sem, 0, 1);
+
 
 /**
  * @brief Main application entry point for Zephyr Water Pump control system
@@ -57,17 +57,10 @@ int main(void)
         return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
     }
 
-    // Initialize sensor manager with retry
-    for (int retry = 0; retry < ERROR_INIT_RETRY_COUNT; retry++) {
-        ret = sensor_manager_init();
-        if (ret == 0) break;
-        LOG_WRN("Sensor manager init failed (attempt %d/%d): %d", retry + 1, ERROR_INIT_RETRY_COUNT, ret);
-        if (retry < ERROR_INIT_RETRY_COUNT - 1) {
-            k_msleep(ERROR_INIT_RETRY_DELAY_MS);
-        }
-    }
-    if (ret < 0) {
-        LOG_ERR("Could not initialize sensor manager after %d attempts (%d)", ERROR_INIT_RETRY_COUNT, ret);
+    // Get flow sensor device reference (driver initializes itself)
+    const struct device *flow_sensor = DEVICE_DT_GET(DT_NODELABEL(flow_sensor));
+    if (!device_is_ready(flow_sensor)) {
+        LOG_ERR("Flow sensor device not ready");
         return ERROR_REPORT_CRITICAL(ERROR_SENSOR_INIT_FAILED);
     }
 
@@ -88,23 +81,47 @@ int main(void)
     while (1) {
         bool current_pump_on = pump_controller_is_on(pump);
 
-        LOG_DBG("Waiting on semaphore (pump_on: %d)", current_pump_on);
+        LOG_DBG("Polling for data (pump_on: %d)", current_pump_on);
 
         int64_t start_wait_ms = k_uptime_get();
-        int64_t timeout_us = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5);
-        k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, MAX_TIMEOUT_US));
+        int64_t timeout_ms = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5 / 1000);
+        bool data_received = false;
 
-        if (k_sem_take(&data_sem, timeout) == 0) {
+        // Poll for valid data
+        while (true) {
+            k_msleep(100);
+
+            if (yf_s201c_is_data_valid(flow_sensor)) {
+                data_received = true;
+                break;
+            }
+
+            if (current_pump_on && timeout_ms > 0 && k_uptime_get() - start_wait_ms > timeout_ms) {
+                break;
+            }
+
+            if (!current_pump_on && timeout_ms < 0) {
+                // Keep polling indefinitely when pump off
+                continue;
+            }
+        }
+
+        if (data_received) {
             int64_t end_wait_ms = k_uptime_get();
 
-            LOG_DBG("Semaphore taken after %lld ms", end_wait_ms - start_wait_ms);
+            LOG_DBG("Data received after %lld ms", end_wait_ms - start_wait_ms);
 
-            fixed_t flow_rate_fixed = sensor_manager_get_flow_rate();
+            fixed_t flow_rate_fixed;
+            ret = yf_s201c_get_flow_rate(flow_sensor, &flow_rate_fixed);
+            if (ret < 0) {
+                LOG_ERR("Failed to get flow rate (%d)", ret);
+                continue;
+            }
             float flow_rate_lpm = fixed_to_float(flow_rate_fixed);
 
             LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
 
-            if (sensor_manager_is_data_valid()) {
+            if (yf_s201c_is_data_valid(flow_sensor)) {
                 bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed, !pump_controller_is_on(pump) ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR);
 
                 if (plateau_detected) {
@@ -112,7 +129,12 @@ int main(void)
                             flow_rate_lpm, fixed_to_float(flow_analyzer_get_noise_std()),
                             fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
 
-                    int64_t current_period = sensor_manager_get_current_period();
+                    int64_t current_period;
+                    ret = yf_s201c_get_current_period(flow_sensor, &current_period);
+                    if (ret < 0) {
+                        LOG_ERR("Failed to get current period (%d)", ret);
+                        continue;
+                    }
 
                     if (!(current_pump_on && current_period < initial_plateau_period)) {
                         latest_plateau_period = current_period;
@@ -136,7 +158,7 @@ int main(void)
 
             LOG_DBG("Timeout after %lld ms, resetting flow state", end_wait_ms - start_wait_ms);
 
-            sensor_manager_reset();
+            yf_s201c_reset(flow_sensor);
             flow_analyzer_reset();
 
             if (pump_controller_is_on(pump)) {
