@@ -72,6 +72,7 @@ static const pump_state_t state_transition_table[PUMP_STATE_COUNT][PUMP_EVENT_CO
 /* Forward declarations */
 static void safety_timer_handler(struct k_timer *timer);
 static int execute_state_transition(struct pump_data *data, const struct pump_config *config, pump_state_t new_state);
+static int set_relay_state(const struct gpio_dt_spec *relay, bool turn_on);
 
 /* Driver API function declarations */
 static int pump_controller_turn_on_impl(const struct device *dev, int64_t plateau_period_us);
@@ -96,6 +97,16 @@ static const struct pump_controller_driver_api pump_controller_api = {
     .get_state = pump_controller_get_state_impl,
     .set_config = pump_controller_set_config_impl,
 };
+
+/* Helper function to set relay state - GPIO API handles active low/high automatically */
+static int set_relay_state(const struct gpio_dt_spec *relay, bool turn_on)
+{
+    /* GPIO API automatically handles polarity inversion based on DT flags
+     * For active low relay: turn_on=true -> physical LOW (API inverts 1->0)
+     * For active high relay: turn_on=true -> physical HIGH (API keeps 1->1)
+     */
+    return gpio_pin_set_dt(relay, turn_on ? 1 : 0);
+}
 
 /* Safety timer handler */
 static void safety_timer_handler(struct k_timer *timer)
@@ -159,7 +170,7 @@ static int execute_state_transition(struct pump_data *data, const struct pump_co
         k_timer_stop(&data->safety_timer);
         /* Force pump relay OFF */
         if (config && gpio_is_ready_dt(&config->relay)) {
-            ret = gpio_pin_set_dt(&config->relay, 1); // OFF
+            ret = set_relay_state(&config->relay, false);
             if (ret < 0) {
                 LOG_ERR("Failed to set pump relay OFF during transition (%d)", ret);
             }
@@ -197,7 +208,7 @@ static int execute_state_transition(struct pump_data *data, const struct pump_co
     case PUMP_STATE_RUNNING:
         /* Start pump and safety timer */
         if (config && gpio_is_ready_dt(&config->relay)) {
-            ret = gpio_pin_set_dt(&config->relay, 0); // ON
+            ret = set_relay_state(&config->relay, true);
             if (ret < 0) {
                 LOG_ERR("Failed to set pump relay ON during transition (%d)", ret);
                 /* Emergency transition to error state */
@@ -310,7 +321,7 @@ static int pump_controller_init(const struct device *dev)
     data->state_entry_time = sys_timepoint_calc(K_NO_WAIT);
 
     /* Ensure pump starts OFF */
-    ret = gpio_pin_set_dt(&config->relay, 1);
+    ret = set_relay_state(&config->relay, false);
     if (ret < 0) {
         LOG_ERR("Could not set initial pump relay state (%d)", ret);
         return ret;
