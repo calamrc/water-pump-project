@@ -103,6 +103,7 @@ typedef struct {
     bool enable_hardware_checks;          /**< Enable hardware-specific checks */
     bool enable_software_checks;          /**< Enable software integrity checks */
     bool enable_environmental_checks;     /**< Enable environmental monitoring */
+    bool enable_communication_checks;     /**< Enable communication checks */
     bool emergency_stop_enabled;          /**< Enable automatic emergency stop */
     uint32_t critical_violation_threshold; /**< Violations to trigger critical status */
     uint32_t emergency_threshold;         /**< Violations to trigger emergency stop */

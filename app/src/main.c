@@ -21,25 +21,10 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 // Semaphore for event-driven sensor data signaling
 K_SEM_DEFINE(data_sem, 0, 1);
 
-// Configuration constants
-#define FLOW_THRESHOLD_L_PER_MIN 0.1f // Minimum flow rate to consider active
-#define PUMP_ON_DEBOUNCE_MS 3000 // Delay in ms before allowing pump to turn on
-
-#define PLATEAU_CONFIRM_COUNT 2 // Consecutive small differences to confirm plateau
-#define PLATEAU_WINDOW_SIZE 5 // Sliding window for calibration
-#define PLATEAU_MIN_SLOPE 0.01f // Minimum slope to assume linear phase (L/min per sample)
-#define PLATEAU_K_FACTOR 3.0f // Threshold multiplier (3-sigma for Gaussian noise)
-#define PLATEAU_INITIAL_K_FACTOR 2.0f // Threshold multiplier (1-sigma for Gaussian noise)
-
-#define PUMP_SAFETY_TIMEOUT_MIN 5 // Max pump runtime in minutes
-#define MAX_TIMEOUT_US 1000000LL // 1 second cap for timeout
-
-// Error handling constants
-#define ERROR_INIT_RETRY_COUNT 3
-#define ERROR_INIT_RETRY_DELAY_MS 100
 
 
-
+=======
+>>>>>>> Stashed changes
 /**
  * @brief Main application entry point for Zephyr Water Pump control system
  *

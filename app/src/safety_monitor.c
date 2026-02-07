@@ -53,7 +53,7 @@ typedef struct {
     bool paused;
     k_tid_t check_thread;
     struct k_thread check_thread_data;
-    K_THREAD_STACK_DEFINE(check_stack, SAFETY_MONITOR_CHECK_STACK_SIZE);
+    k_thread_stack_t check_stack[SAFETY_MONITOR_CHECK_STACK_SIZE];
 } safety_monitor_ctx_t;
 
 /* ============================================================================
@@ -61,7 +61,7 @@ typedef struct {
  * ============================================================================ */
 
 static safety_monitor_ctx_t safety_ctx;
-static safety_check_registration_t check_callbacks[SAFETY_CHECK_TYPE_COUNT];
+static safety_check_registration_t check_callbacks[SAFETY_CHECK_COUNT];
 static safety_violation_registration_t violation_callbacks[SAFETY_MONITOR_MAX_CALLBACKS];
 
 static K_MUTEX_DEFINE(safety_mutex);
@@ -95,7 +95,7 @@ static void update_safety_status(void)
 static int execute_safety_check(safety_check_type_t check_type,
                                safety_check_result_t *result)
 {
-    if (check_type >= SAFETY_CHECK_TYPE_COUNT || !result) {
+    if (check_type >= SAFETY_CHECK_COUNT || !result) {
         return -EINVAL;
     }
 
@@ -157,10 +157,10 @@ static void safety_check_thread(void *arg1, void *arg2, void *arg3)
         k_mutex_lock(&safety_mutex, K_FOREVER);
 
         /* Perform all safety checks */
-        safety_check_result_t results[SAFETY_CHECK_TYPE_COUNT];
+        safety_check_result_t results[SAFETY_CHECK_COUNT];
         uint32_t check_count = 0;
 
-        for (int i = 0; i < SAFETY_CHECK_TYPE_COUNT; i++) {
+        for (int i = 0; i < SAFETY_CHECK_COUNT; i++) {
             if (execute_safety_check((safety_check_type_t)i, &results[check_count]) == 0) {
                 check_count++;
             }
@@ -231,8 +231,8 @@ int safety_monitor_init(void)
 
     /* Create safety check thread */
     safety_ctx.check_thread = k_thread_create(&safety_ctx.check_thread_data,
-                                             check_stack,
-                                             K_THREAD_STACK_SIZEOF(check_stack),
+                                             safety_ctx.check_stack,
+                                             sizeof(safety_ctx.check_stack),
                                              safety_check_thread,
                                              NULL, NULL, NULL,
                                              SAFETY_MONITOR_CHECK_PRIORITY,
@@ -283,7 +283,7 @@ int safety_monitor_register_check(safety_check_type_t check_type,
                                  safety_check_callback_t callback,
                                  void *user_data)
 {
-    if (check_type >= SAFETY_CHECK_TYPE_COUNT || !callback) {
+    if (check_type >= SAFETY_CHECK_COUNT || !callback) {
         return -EINVAL;
     }
 
@@ -332,7 +332,7 @@ int safety_monitor_check_now(safety_check_result_t *results, uint32_t max_result
     k_mutex_lock(&safety_mutex, K_FOREVER);
 
     uint32_t result_count = 0;
-    for (int i = 0; i < SAFETY_CHECK_TYPE_COUNT && result_count < max_results; i++) {
+    for (int i = 0; i < SAFETY_CHECK_COUNT && result_count < max_results; i++) {
         if (execute_safety_check((safety_check_type_t)i, &results[result_count]) == 0) {
             result_count++;
         }
@@ -367,7 +367,7 @@ int safety_monitor_get_statistics(safety_statistics_t *stats)
 
 bool safety_monitor_check_available(safety_check_type_t check_type)
 {
-    if (check_type >= SAFETY_CHECK_TYPE_COUNT) {
+    if (check_type >= SAFETY_CHECK_COUNT) {
         return false;
     }
 
@@ -479,7 +479,7 @@ const char *safety_check_type_to_string(safety_check_type_t check_type)
         "HARDWARE", "SOFTWARE", "ENVIRONMENTAL", "COMMUNICATION", "POWER"
     };
 
-    if (check_type < SAFETY_CHECK_TYPE_COUNT) {
+    if (check_type < SAFETY_CHECK_COUNT) {
         return type_strings[check_type];
     }
     return "UNKNOWN";

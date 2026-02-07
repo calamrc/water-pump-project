@@ -1,0 +1,86 @@
+# Copyright (c) 2021 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+#
+# This file is the application Kconfig entry point. All application Kconfig
+# options can be defined here or included via other application Kconfig files.
+# You can browse these options using the west targets menuconfig (terminal) or
+# guiconfig (GUI).
+
+menu "Zephyr"
+source "Kconfig.zephyr"
+endmenu
+
+module = APP
+module-str = APP
+source "subsys/logging/Kconfig.template.log_config"
+
+menu "Water Pump Application Configuration"
+
+config APP_FLOW_THRESHOLD_MILLI_L_PER_MIN
+	int "Minimum flow rate threshold (milli L/min)"
+	default 100
+	help
+	  Minimum flow rate to consider active, in milli-liters per minute.
+	  Default: 0.1 L/min
+
+config APP_PUMP_ON_DEBOUNCE_MS
+	int "Pump on debounce delay (ms)"
+	default 3000
+	help
+	  Delay in milliseconds before allowing pump to turn on.
+
+config APP_PLATEAU_CONFIRM_COUNT
+	int "Consecutive plateau confirmations needed"
+	default 2
+	help
+	  Number of consecutive small differences to confirm plateau.
+
+config APP_PLATEAU_WINDOW_SIZE
+	int "Sliding window size for plateau detection"
+	default 5
+	help
+	  Size of sliding window for calibration plateau detection.
+
+config APP_PLATEAU_MIN_SLOPE_MILLI
+	int "Minimum slope for linear phase (milli L/min per sample)"
+	default 10
+	help
+	  Minimum slope to assume linear phase, in milli-units.
+
+config APP_PLATEAU_K_FACTOR_MILLI
+	int "Plateau threshold multiplier (milli)"
+	default 3000
+	help
+	  Threshold multiplier for plateau detection (3-sigma), in milli-units.
+
+config APP_PLATEAU_INITIAL_K_FACTOR_MILLI
+	int "Initial plateau threshold multiplier (milli)"
+	default 2000
+	help
+	  Initial threshold multiplier for plateau detection (2-sigma), in milli-units.
+
+config APP_PUMP_SAFETY_TIMEOUT_MIN
+	int "Max pump runtime (minutes)"
+	default 5
+	help
+	  Maximum pump runtime in minutes before safety shutdown.
+
+config APP_MAX_TIMEOUT_US
+	hex "Maximum timeout cap (microseconds)"
+	default 0xF4240
+	help
+	  Maximum timeout cap in microseconds (default: 1,000,000 = 1 second).
+
+config APP_ERROR_INIT_RETRY_COUNT
+	int "Error handler init retry count"
+	default 3
+	help
+	  Number of retries for error handler initialization.
+
+config APP_ERROR_INIT_RETRY_DELAY_MS
+	int "Error handler init retry delay (ms)"
+	default 100
+	help
+	  Delay between retries for error handler initialization in milliseconds.
+
+endmenu
