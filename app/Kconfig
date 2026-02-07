@@ -143,6 +143,27 @@ config SUPERVISOR_PRIORITY
 	help
 	  Priority of the supervisor thread (lower number = higher priority).
 
+config SAFETY_MONITOR_CHECK_INTERVAL_MS
+	int "Safety monitor check interval (ms)"
+	default 500
+	range 100 5000
+	help
+	  Interval in milliseconds between safety monitor checks.
+
+config SAFETY_MONITOR_MAX_RUNTIME_MINUTES
+	int "Safety monitor maximum pump runtime (minutes)"
+	default 30
+	range 5 120
+	help
+	  Maximum allowed pump runtime in minutes before emergency stop.
+
+config SAFETY_MONITOR_WARNING_THRESHOLD_MINUTES
+	int "Safety monitor warning threshold (minutes)"
+	default 25
+	range 1 120
+	help
+	  Runtime threshold in minutes when warnings are issued before emergency stop.
+
 endmenu
 
 endmenu
