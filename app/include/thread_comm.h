@@ -84,4 +84,8 @@ struct thread_health_info {
 extern struct k_msgq sensor_data_msgq;
 extern struct k_sem pump_event_sem;
 
+/* Thread health update function - defined in thread_manager.c */
+void thread_health_update(k_tid_t thread_id, enum thread_health_status status,
+                         uint32_t messages_processed, uint32_t errors_encountered);
+
 #endif /* THREAD_COMM_H_ */
