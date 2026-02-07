@@ -21,10 +21,6 @@ LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 // Semaphore for event-driven sensor data signaling
 K_SEM_DEFINE(data_sem, 0, 1);
 
-
-
-=======
->>>>>>> Stashed changes
 /**
  * @brief Main application entry point for Zephyr Water Pump control system
  *
@@ -68,7 +64,7 @@ int main(void)
 
     // Get pump controller device reference (driver initializes itself)
     const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
-    if (!PUMP_CONTROLLER_DT_CHECK(DT_NODELABEL(pump_controller))) {
+    if (!device_is_ready(pump)) {
         LOG_ERR("Pump controller device not ready");
         return ERROR_REPORT_CRITICAL(ERROR_PUMP_GPIO_FAILED);
     }
@@ -80,7 +76,7 @@ int main(void)
 
         int64_t start_wait_ms = k_uptime_get();
         int64_t timeout_us = (!current_pump_on) ? -1LL : (latest_plateau_period * 1.5);
-        k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, MAX_TIMEOUT_US));
+        k_timeout_t timeout = (!current_pump_on) ? K_FOREVER : K_USEC(MIN(timeout_us, CONFIG_APP_MAX_TIMEOUT_US));
 
         if (k_sem_take(&data_sem, timeout) == 0) {
             int64_t end_wait_ms = k_uptime_get();
@@ -95,15 +91,15 @@ int main(void)
             }
             float flow_rate_lpm = fixed_to_float(flow_rate_fixed);
 
-            LOG_INF("Flow rate: %.2f L/min", flow_rate_lpm);
+            LOG_INF("Flow rate: %.2f L/min", (double)flow_rate_lpm);
 
             if (yf_s201c_is_data_valid(flow_sensor)) {
                 bool plateau_detected = flow_analyzer_detect_plateau(flow_rate_fixed, !pump_controller_is_on(pump) ? FIXED_PLATEAU_INITIAL_K_FACTOR : FIXED_PLATEAU_K_FACTOR);
 
                 if (plateau_detected) {
                     LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
-                            flow_rate_lpm, fixed_to_float(flow_analyzer_get_noise_std()),
-                            fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
+                            (double)flow_rate_lpm, (double)fixed_to_float(flow_analyzer_get_noise_std()),
+                            (double)fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
 
                     int64_t current_period;
                     ret = yf_s201c_get_current_period(flow_sensor, &current_period);
