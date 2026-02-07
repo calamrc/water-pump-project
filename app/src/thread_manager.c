@@ -329,7 +329,6 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
     /* State variables (preserve from original main.c) */
     int64_t initial_plateau_period = 0;
     int64_t latest_plateau_period = 0;
-    int64_t pump_start_time = 0;
 
     LOG_INF("Pump controller thread ready for sensor data processing");
 
@@ -337,7 +336,15 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
         struct sensor_data_msg msg;
 
         /* Wait for sensor data from message queue with timeout when pump is on */
-        k_timeout_t timeout = pump_controller_is_on(pump) ? K_MSEC(100) : K_FOREVER;
+        k_timeout_t timeout;
+        if (pump_controller_is_on(pump) && latest_plateau_period > 0) {
+            /* Timeout after 1.5x plateau period, same as original logic */
+            int64_t timeout_us = latest_plateau_period * 15 / 10; // 1.5x plateau period
+            timeout_us = MIN(timeout_us, (int64_t)CONFIG_APP_MAX_TIMEOUT_US);
+            timeout = K_USEC(timeout_us);
+        } else {
+            timeout = K_FOREVER;
+        }
 
         if (k_msgq_get(&sensor_data_msgq, &msg, timeout) == 0) {
             LOG_DBG("Pump controller received sensor data (seq: %u, flow: %.2f L/min)",
@@ -382,7 +389,6 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
                         thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 1, 1);
                     } else {
                         initial_plateau_period = current_period;
-                        pump_start_time = k_uptime_get();
                         LOG_INF("Pump turned on with plateau period: %lld ms", latest_plateau_period);
                         thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
                     }
@@ -392,27 +398,19 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
                 thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
             }
         } else {
-            /* Timeout occurred - check if pump should be turned off */
-            if (pump_controller_is_on(pump) && latest_plateau_period > 0) {
-                int64_t elapsed = k_uptime_get() - pump_start_time;
-                int64_t timeout_limit = latest_plateau_period * 15 / 10; // 1.5x plateau period
-
-                if (elapsed > timeout_limit) {
-                    LOG_INF("Plateau period expired, turning off pump (elapsed: %lld ms, limit: %lld ms)",
-                           elapsed, timeout_limit);
-                    int ret = pump_controller_turn_off(pump);
-                    if (ret < 0) {
-                        LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
-                        thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
-                    } else {
-                        initial_plateau_period = 0;
-                        latest_plateau_period = 0;
-                        yf_s201c_reset(flow_sensor);
-                        flow_analyzer_reset();
-                        LOG_INF("Pump turned off due to timeout");
-                        thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-                    }
-                }
+            /* Timeout occurred - turn off pump (same logic as original main.c) */
+            LOG_INF("Sensor data timeout, turning off pump");
+            int ret = pump_controller_turn_off(pump);
+            if (ret < 0) {
+                LOG_ERR("Failed to turn off pump on timeout (%d)", ret);
+                thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
+            } else {
+                initial_plateau_period = 0;
+                latest_plateau_period = 0;
+                yf_s201c_reset(flow_sensor);
+                flow_analyzer_reset();
+                LOG_INF("Pump turned off due to sensor timeout");
+                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
             }
         }
     }
