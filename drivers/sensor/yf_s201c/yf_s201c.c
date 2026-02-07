@@ -73,12 +73,17 @@ void yf_s201c_isr(const struct device *port, struct gpio_callback *cb, gpio_port
             data->isr_current_period_us = current_period_us;
             data->isr_valid_update = true;
 
-            // Submit work item
-            k_work_submit(&data->work);
+            // Submit work item only if not already pending
+            if (!k_work_is_pending(&data->work)) {
+                k_work_submit(&data->work);
+            }
         } else {
             // Invalid period
             data->isr_valid_update = false;
-            k_work_submit(&data->work);
+            // Submit work item only if not already pending
+            if (!k_work_is_pending(&data->work)) {
+                k_work_submit(&data->work);
+            }
         }
     }
 
