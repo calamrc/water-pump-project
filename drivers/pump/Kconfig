@@ -1,0 +1,16 @@
+# Pump Controller Driver Configuration
+
+config PUMP_CONTROLLER
+    bool "Aygu Pump Controller Driver"
+    default y
+    depends on GPIO
+    help
+      Enable the Aygu pump controller driver with integrated state management
+      and safety timers.
+
+config PUMP_CONTROLLER_INIT_PRIORITY
+    int "Pump Controller init priority"
+    default 40
+    depends on PUMP_CONTROLLER
+    help
+      Init priority for pump controller driver.
