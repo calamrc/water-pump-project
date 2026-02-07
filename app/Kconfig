@@ -83,4 +83,66 @@ config APP_ERROR_INIT_RETRY_DELAY_MS
 	help
 	  Delay between retries for error handler initialization in milliseconds.
 
+menu "Thread Architecture Configuration"
+
+config SENSOR_MONITOR_STACK_SIZE
+	int "Sensor monitor thread stack size (bytes)"
+	default 2048
+	help
+	  Stack size for the sensor monitor thread in bytes.
+
+config PUMP_CONTROLLER_STACK_SIZE
+	int "Pump controller thread stack size (bytes)"
+	default 3072
+	help
+	  Stack size for the pump controller thread in bytes.
+
+config SAFETY_MONITOR_STACK_SIZE
+	int "Safety monitor thread stack size (bytes)"
+	default 1536
+	help
+	  Stack size for the safety monitor thread in bytes.
+
+config SUPERVISOR_STACK_SIZE
+	int "Supervisor thread stack size (bytes)"
+	default 2048
+	help
+	  Stack size for the supervisor thread in bytes.
+
+config APP_SENSOR_MSGQ_SIZE
+	int "Sensor data message queue size"
+	default 4
+	help
+	  Maximum number of sensor data messages in the queue.
+
+config SENSOR_MONITOR_PRIORITY
+	int "Sensor monitor thread priority"
+	default 2
+	range 0 15
+	help
+	  Priority of the sensor monitor thread (lower number = higher priority).
+
+config PUMP_CONTROLLER_PRIORITY
+	int "Pump controller thread priority"
+	default 5
+	range 0 15
+	help
+	  Priority of the pump controller thread (lower number = higher priority).
+
+config SAFETY_MONITOR_PRIORITY
+	int "Safety monitor thread priority"
+	default 1
+	range 0 15
+	help
+	  Priority of the safety monitor thread (lower number = higher priority).
+
+config SUPERVISOR_PRIORITY
+	int "Supervisor thread priority"
+	default 7
+	range 0 15
+	help
+	  Priority of the supervisor thread (lower number = higher priority).
+
+endmenu
+
 endmenu
