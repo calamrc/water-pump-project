@@ -161,7 +161,7 @@ static int thread_health_check_all(void)
                    thread_name,
                    thread_health[i].stack_peak_usage,
                    thread_health[i].stack_size,
-                   (float)thread_health[i].stack_peak_usage * 100 / thread_health[i].stack_size);
+                   (double)((float)thread_health[i].stack_peak_usage * 100 / thread_health[i].stack_size));
         }
 
         /* Check for excessive error rates */
@@ -454,7 +454,7 @@ void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
                 ret = k_msgq_put(&sensor_data_msgq, &msg, K_NO_WAIT);
                 if (ret == 0) {
                     LOG_DBG("Sensor data forwarded to pump controller (seq: %u, flow: %.2f L/min)",
-                           msg.sequence_number, fixed_to_float(flow_rate));
+                           msg.sequence_number, (double)fixed_to_float(flow_rate));
                     thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
                 } else {
                     LOG_WRN("Failed to queue sensor data (%d)", ret);
@@ -520,7 +520,7 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 
         if (k_msgq_get(&sensor_data_msgq, &msg, timeout) == 0) {
             LOG_DBG("Pump controller received sensor data (seq: %u, flow: %.2f L/min)",
-                   msg.sequence_number, fixed_to_float(msg.flow_rate));
+                   msg.sequence_number, (double)fixed_to_float(msg.flow_rate));
 
             /* Perform plateau detection (preserve exact logic from main.c) */
             bool current_pump_on = pump_controller_is_on(pump);
@@ -531,9 +531,9 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
 
             if (plateau_detected) {
                 LOG_INF("Plateau detected at flow rate: %.2f L/min (noise std: %.4f, epsilon: %.4f)",
-                        fixed_to_float(msg.flow_rate),
-                        fixed_to_float(flow_analyzer_get_noise_std()),
-                        fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
+                        (double)fixed_to_float(msg.flow_rate),
+                        (double)fixed_to_float(flow_analyzer_get_noise_std()),
+                        (double)fixed_to_float(fixed_mul(FIXED_PLATEAU_K_FACTOR, flow_analyzer_get_noise_std())));
 
                 /* Get current period for plateau tracking */
                 int64_t current_period;

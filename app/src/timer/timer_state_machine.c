@@ -20,19 +20,7 @@ static uint32_t remaining_seconds = TIMER_DEFAULT_SECONDS;
 /* State change callback (optional, for notifications) */
 static void (*state_change_callback)(enum timer_state new_state) = NULL;
 
-/**
- * @brief Clamp value between min and max
- */
-static uint32_t clamp_time(uint32_t seconds)
-{
-    if (seconds < TIMER_MIN_SECONDS) {
-        return TIMER_MIN_SECONDS;
-    }
-    if (seconds > TIMER_MAX_SECONDS) {
-        return TIMER_MAX_SECONDS;
-    }
-    return seconds;
-}
+
 
 /**
  * @brief Update time from seconds to minutes/seconds
