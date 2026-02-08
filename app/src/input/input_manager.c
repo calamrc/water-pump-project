@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(input_manager, CONFIG_APP_LOG_LEVEL);
 #define LONG_PRESS_MS 1000
 
 /* Encoder step threshold - qdec generates 4 events per detent */
-#define ENCODER_STEPS_PER_DETENT 4
+#define ENCODER_STEPS_PER_DETENT 2
 
 /* Maximum accumulated events to prevent overflow */
 #define MAX_ENCODER_DELTA 100
