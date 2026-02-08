@@ -2,26 +2,76 @@
  * ESP32 board overlay for water pump application
  */
 
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
 &gpio0 {
 	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	sda-gpios = <&gpio0 21 GPIO_OPEN_DRAIN>;
+	scl-gpios = <&gpio0 22 GPIO_OPEN_DRAIN>;
+
+	sh1106: sh1106@3c {
+		compatible = "sinowealth,sh1106";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <2>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0x22>;
+	};
 };
 
 / {
 	pump_controller: pump_controller {
 		compatible = "aygu,pump-controller";
-		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;   /* Changed from ACTIVE_HIGH - relay may need LOW to activate */
+		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
 		safety-timeout-min = <5>;
 		status = "okay";
 	};
 
 	flow_sensor: flow-sensor {
 		compatible = "aygu,yf-s201c";
-		gpios = <&gpio0 18 GPIO_PULL_UP>;  /* Input with pull-up */
+		gpios = <&gpio0 18 GPIO_PULL_UP>;
 		pulses-per-liter = <450>;
 		min-period-us = <100>;
 		buffer-size = <5>;
 		stale-threshold-ms = <200>;
 		consecutive-invalid-threshold = <5>;
 		status = "okay";
+	};
+
+	qdec: qdec {
+		compatible = "gpio-qdec";
+		gpios = <&gpio1 32 GPIO_PULL_UP>, <&gpio1 33 GPIO_PULL_UP>;
+		steps-per-period = <4>;
+		zephyr,axis = <INPUT_REL_WHEEL>;
+		sample-time-us = <2000>;
+		idle-timeout-ms = <200>;
+		status = "okay";
+	};
+
+	/* GPIO Keys for EC11 Button */
+	gpio_keys: gpio_keys {
+		compatible = "gpio-keys";
+		
+		ec11_button: ec11_button {
+			label = "EC11 Button";
+			gpios = <&gpio0 26 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_ENTER>;
+		};
 	};
 };

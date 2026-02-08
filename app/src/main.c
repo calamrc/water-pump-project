@@ -13,6 +13,7 @@
 #include "error_handler.h"
 #include "flow_analyzer.h"
 #include "thread_manager.h"
+#include "ui_manager.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
@@ -41,6 +42,13 @@ int main(void)
     if (ret < 0) {
         LOG_ERR("Could not initialize flow analyzer (%d)", ret);
         return ERROR_REPORT_CRITICAL(ERROR_FLOW_CALCULATION_ERROR);
+    }
+
+    // Initialize UI manager (display and input)
+    ret = ui_manager_init();
+    if (ret < 0) {
+        LOG_ERR("Could not initialize UI manager (%d)", ret);
+        return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
     }
 
     // Get pump controller device reference (driver initializes itself)
