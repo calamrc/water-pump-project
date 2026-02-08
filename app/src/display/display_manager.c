@@ -100,7 +100,7 @@ void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash)
     }
 
     /* Format time string "MM:SS" */
-    char time_str[6];
+    char time_str[8];
     snprintf(time_str, sizeof(time_str), "%02u:%02u", minutes, seconds);
 
     /* Get display dimensions */

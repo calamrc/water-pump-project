@@ -184,7 +184,6 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
         /* Update timer every second */
         if ((now - last_timer_update) >= TIMER_UPDATE_INTERVAL_MS) {
             /* Calculate how many seconds passed (could be more than 1 if we were blocked) */
-            int64_t elapsed = now - last_timer_update;
             last_timer_update = now;
             
             /* Update timer state machine */
