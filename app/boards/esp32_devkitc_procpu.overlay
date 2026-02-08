@@ -56,7 +56,7 @@
 
 	qdec: qdec {
 		compatible = "gpio-qdec";
-		gpios = <&gpio0 25 GPIO_PULL_UP>, <&gpio1 33 GPIO_PULL_UP>;
+		gpios = <&gpio1 32 GPIO_PULL_UP>, <&gpio1 33 GPIO_PULL_UP>;
 		steps-per-period = <4>;
 		zephyr,axis = <INPUT_REL_WHEEL>;
 		sample-time-us = <2000>;
