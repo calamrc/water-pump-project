@@ -14,3 +14,6 @@ __pycache__/
 
 # docs
 /doc/_build*
+
+# clangd cache
+.cache/

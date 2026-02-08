@@ -1,0 +1,18 @@
+config YF_S201C
+	bool "YF-S201C Flow Sensor Driver"
+	default y
+	depends on GPIO
+	help
+	  Enable support for YF-S201C hall effect flow sensor.
+	  Provides GPIO interrupt-based pulse counting with median filtering
+	  and flow rate calculation.
+
+if YF_S201C
+
+config YF_S201C_INIT_PRIORITY
+	int "Init priority"
+	default 90
+	help
+	  YF-S201C driver initialization priority
+
+endif # YF_S201C

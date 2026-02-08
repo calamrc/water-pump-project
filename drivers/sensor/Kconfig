@@ -1,0 +1,2 @@
+# YF-S201C Flow Sensor Driver Configuration
+rsource "yf_s201c/Kconfig"
