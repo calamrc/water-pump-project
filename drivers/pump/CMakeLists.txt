@@ -1,0 +1,2 @@
+# Pump Controller Driver Build Configuration
+zephyr_library_sources_ifdef(CONFIG_PUMP_CONTROLLER pump_controller.c)

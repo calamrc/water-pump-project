@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <string.h>
-
-LOG_MODULE_REGISTER(flow_analyzer);
-
 #include "flow_analyzer.h"
 #include "fixed_math.h"
+
+LOG_MODULE_REGISTER(flow_analyzer);
 
 /* ============================================================================
  * Module Variables (Static to module)
@@ -25,8 +24,8 @@ int flow_buffer_index = 0;
 int flow_diff_count = 0;
 
 // Analysis configuration constants
-const int PLATEAU_WINDOW_SIZE = 5;
-const int PLATEAU_CONFIRM_COUNT = 2;
+const int PLATEAU_WINDOW_SIZE = CONFIG_APP_PLATEAU_WINDOW_SIZE;
+const int PLATEAU_CONFIRM_COUNT = CONFIG_APP_PLATEAU_CONFIRM_COUNT;
 
 // Thread safety mutex
 K_MUTEX_DEFINE(flow_buffer_mutex);
@@ -56,7 +55,17 @@ int flow_analyzer_init(void)
 bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
 {
     LOG_DBG("detect_plateau called with flow_rate: %.3f, buffer_index: %d",
-            fixed_to_float(flow_rate), flow_buffer_index);
+            (double)fixed_to_float(flow_rate), flow_buffer_index);
+
+    // Thread-safe buffer access
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+
+    // Bounds check for buffer access
+    if (flow_buffer_index < 0 || flow_buffer_index >= PLATEAU_WINDOW_SIZE) {
+        LOG_ERR("Invalid buffer_index: %d", flow_buffer_index);
+        k_mutex_unlock(&flow_buffer_mutex);
+        return false;
+    }
 
     // Thread-safe buffer access
     k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
@@ -89,7 +98,7 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
     k_mutex_unlock(&flow_buffer_mutex);
 
     if (is_first_value) { // First value (using FIXED_MIN as sentinel)
-        LOG_DBG("First flow value, setting prev_flow: %.3f", fixed_to_float(flow_rate));
+        LOG_DBG("First flow value, setting prev_flow: %.3f", (double)fixed_to_float(flow_rate));
 
         k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
         prev_flow = flow_rate;
@@ -113,7 +122,7 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
     }
 
     LOG_DBG("Calculated delta: %.4f, epsilon: %.4f, prev_flow: %.3f",
-            fixed_to_float(delta), fixed_to_float(epsilon), fixed_to_float(current_prev_flow));
+            (double)fixed_to_float(delta), (double)fixed_to_float(epsilon), (double)fixed_to_float(current_prev_flow));
 
     // Thread-safe access to flow_diff_count
     k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
@@ -134,7 +143,7 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
     prev_flow = flow_rate;
     k_mutex_unlock(&flow_buffer_mutex);
 
-    LOG_DBG("Updated prev_flow: %.3f", fixed_to_float(flow_rate));
+    LOG_DBG("Updated prev_flow: %.3f", (double)fixed_to_float(flow_rate));
 
     return false;
 }
@@ -142,6 +151,12 @@ bool flow_analyzer_detect_plateau(fixed_t flow_rate, fixed_t k_factor)
 void flow_analyzer_calibrate_plateau(void) {
     if (flow_buffer_index != 0) // Calibrate only when buffer full
         return;
+
+    // Bounds check for safety
+    if (PLATEAU_WINDOW_SIZE <= 0 || PLATEAU_WINDOW_SIZE > 10) {
+        LOG_ERR("Invalid PLATEAU_WINDOW_SIZE: %d", PLATEAU_WINDOW_SIZE);
+        return;
+    }
 
     // Compute differences for slope using fixed-point arithmetic
     fixed_t sum_diffs = 0;
@@ -156,19 +171,16 @@ void flow_analyzer_calibrate_plateau(void) {
 
     // Check if slope is significant using fixed-point comparison
     if (fixed_gt(fixed_abs(flow_slope), FIXED_PLATEAU_MIN_SLOPE)) {
-        // Predict linear values
-        fixed_t predicted[PLATEAU_WINDOW_SIZE];
-
-        for (int i = 0; i < PLATEAU_WINDOW_SIZE; i++) {
-            fixed_t slope_term = fixed_mul_int(flow_slope, i);
-            predicted[i] = fixed_add(flow_buffer[0], slope_term);
-        }
-
-        // Compute residuals and noise std using fixed-point
+        // Compute residuals directly without temporary array to save stack space
         fixed_t sum_sq_res = 0;
 
         for (int i = 0; i < PLATEAU_WINDOW_SIZE; i++) {
-            fixed_t residual = fixed_sub(flow_buffer[i], predicted[i]);
+            // Calculate predicted value inline: predicted[i] = flow_buffer[0] + flow_slope * i
+            fixed_t slope_term = fixed_mul_int(flow_slope, i);
+            fixed_t predicted = fixed_add(flow_buffer[0], slope_term);
+
+            // Compute residual: flow_buffer[i] - predicted
+            fixed_t residual = fixed_sub(flow_buffer[i], predicted);
             sum_sq_res = fixed_add(sum_sq_res, fixed_mul(residual, residual));
         }
 
@@ -181,7 +193,7 @@ void flow_analyzer_calibrate_plateau(void) {
     }
 
     LOG_DBG("Calibration complete, noise_std: %.4f, flow_slope: %.4f",
-            fixed_to_float(noise_std), fixed_to_float(flow_slope));
+            (double)fixed_to_float(noise_std), (double)fixed_to_float(flow_slope));
 }
 
 bool flow_analyzer_is_calibrated(void)
@@ -209,10 +221,16 @@ void flow_analyzer_reset(void)
 
 fixed_t flow_analyzer_get_noise_std(void)
 {
-    return noise_std;
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+    fixed_t std = noise_std;
+    k_mutex_unlock(&flow_buffer_mutex);
+    return std;
 }
 
 fixed_t flow_analyzer_get_flow_slope(void)
 {
-    return flow_slope;
+    k_mutex_lock(&flow_buffer_mutex, K_FOREVER);
+    fixed_t slope = flow_slope;
+    k_mutex_unlock(&flow_buffer_mutex);
+    return slope;
 }

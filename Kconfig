@@ -1,2 +1,4 @@
 # Copyright (c) 2025 Ramon Cristopher Calam
 # SPDX-License-Identifier: Apache-2.0
+
+rsource "drivers/Kconfig"

@@ -1,0 +1,40 @@
+description: |
+  YF-S201C Hall Effect Flow Sensor Driver
+
+  This driver supports the YF-S201C water flow sensor with GPIO interrupt-based
+  pulse counting, median filtering, and flow rate calculation.
+
+compatible: "aygu,yf-s201c"
+
+include: base.yaml
+
+properties:
+  gpios:
+    type: phandle-array
+    required: true
+    description: GPIO pin for sensor input (interrupt on falling edge)
+
+  pulses-per-liter:
+    type: int
+    default: 450
+    description: Number of pulses per liter for flow rate calculation
+
+  min-period-us:
+    type: int
+    default: 100
+    description: Minimum valid period between pulses in microseconds
+
+  buffer-size:
+    type: int
+    default: 5
+    description: Size of the median filtering buffer (must be odd)
+
+  stale-threshold-ms:
+    type: int
+    default: 200
+    description: Maximum age of valid data before considered stale
+
+  consecutive-invalid-threshold:
+    type: int
+    default: 5
+    description: Number of consecutive invalid periods before buffer reset

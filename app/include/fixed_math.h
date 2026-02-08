@@ -284,12 +284,14 @@ static inline fixed_t fixed_sqrt(fixed_t x) {
     uint32_t result = 0;
     uint32_t bit = 1 << 30; // Start with highest bit
 
-    // Integer square root algorithm
-    while (bit > x_int) {
+    // Integer square root algorithm - find initial bit position
+    while (bit > x_int && bit > 1) {
         bit >>= 2;
     }
 
-    while (bit != 0) {
+    // Main square root calculation with safety limit
+    int iterations = 0;
+    while (bit != 0 && iterations < 16) {  // Safety limit to prevent infinite loops
         if (x_int >= result + bit) {
             x_int -= result + bit;
             result = (result >> 1) + bit;
@@ -297,6 +299,7 @@ static inline fixed_t fixed_sqrt(fixed_t x) {
             result >>= 1;
         }
         bit >>= 2;
+        iterations++;
     }
 
     // Convert back to fixed-point and adjust scaling

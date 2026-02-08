@@ -1,0 +1,182 @@
+# Copyright (c) 2021 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+#
+# This file is the application Kconfig entry point. All application Kconfig
+# options can be defined here or included via other application Kconfig files.
+# You can browse these options using the west targets menuconfig (terminal) or
+# guiconfig (GUI).
+
+menu "Zephyr"
+source "Kconfig.zephyr"
+endmenu
+
+module = APP
+module-str = APP
+source "subsys/logging/Kconfig.template.log_config"
+
+menu "Water Pump Application Configuration"
+
+config APP_FLOW_THRESHOLD_MILLI_L_PER_MIN
+	int "Minimum flow rate threshold (milli L/min)"
+	default 100
+	help
+	  Minimum flow rate to consider active, in milli-liters per minute.
+	  Default: 0.1 L/min
+
+config APP_PUMP_ON_DEBOUNCE_MS
+	int "Pump on debounce delay (ms)"
+	default 3000
+	help
+	  Delay in milliseconds before allowing pump to turn on.
+
+config APP_PLATEAU_CONFIRM_COUNT
+	int "Consecutive plateau confirmations needed"
+	default 2
+	help
+	  Number of consecutive small differences to confirm plateau.
+
+config APP_PLATEAU_WINDOW_SIZE
+	int "Sliding window size for plateau detection"
+	default 5
+	help
+	  Size of sliding window for calibration plateau detection.
+
+config APP_PLATEAU_MIN_SLOPE_MILLI
+	int "Minimum slope for linear phase (milli L/min per sample)"
+	default 10
+	help
+	  Minimum slope to assume linear phase, in milli-units.
+
+config APP_PLATEAU_K_FACTOR_MILLI
+	int "Plateau threshold multiplier (milli)"
+	default 3000
+	help
+	  Threshold multiplier for plateau detection (3-sigma), in milli-units.
+
+config APP_PLATEAU_INITIAL_K_FACTOR_MILLI
+	int "Initial plateau threshold multiplier (milli)"
+	default 2000
+	help
+	  Initial threshold multiplier for plateau detection (2-sigma), in milli-units.
+
+config APP_PUMP_SAFETY_TIMEOUT_MIN
+	int "Max pump runtime (minutes)"
+	default 5
+	help
+	  Maximum pump runtime in minutes before safety shutdown.
+
+config APP_MAX_TIMEOUT_US
+	hex "Maximum timeout cap (microseconds)"
+	default 0xF4240
+	help
+	  Maximum timeout cap in microseconds (default: 1,000,000 = 1 second).
+
+config APP_ERROR_INIT_RETRY_COUNT
+	int "Error handler init retry count"
+	default 3
+	help
+	  Number of retries for error handler initialization.
+
+config APP_ERROR_INIT_RETRY_DELAY_MS
+	int "Error handler init retry delay (ms)"
+	default 100
+	help
+	  Delay between retries for error handler initialization in milliseconds.
+
+menu "Thread Architecture Configuration"
+
+config SENSOR_MONITOR_STACK_SIZE
+	int "Sensor monitor thread stack size (bytes)"
+	default 2048
+	help
+	  Stack size for the sensor monitor thread in bytes.
+
+config PUMP_CONTROLLER_STACK_SIZE
+	int "Pump controller thread stack size (bytes)"
+	default 3072
+	help
+	  Stack size for the pump controller thread in bytes.
+
+config SAFETY_MONITOR_STACK_SIZE
+	int "Safety monitor thread stack size (bytes)"
+	default 1536
+	help
+	  Stack size for the safety monitor thread in bytes.
+
+config SUPERVISOR_STACK_SIZE
+	int "Supervisor thread stack size (bytes)"
+	default 2048
+	help
+	  Stack size for the supervisor thread in bytes.
+
+config APP_SENSOR_MSGQ_SIZE
+	int "Sensor data message queue size"
+	default 4
+	help
+	  Maximum number of sensor data messages in the queue.
+
+config SENSOR_MONITOR_PRIORITY
+	int "Sensor monitor thread priority"
+	default 2
+	range 0 15
+	help
+	  Priority of the sensor monitor thread (lower number = higher priority).
+
+config PUMP_CONTROLLER_PRIORITY
+	int "Pump controller thread priority"
+	default 5
+	range 0 15
+	help
+	  Priority of the pump controller thread (lower number = higher priority).
+
+config SAFETY_MONITOR_PRIORITY
+	int "Safety monitor thread priority"
+	default 1
+	range 0 15
+	help
+	  Priority of the safety monitor thread (lower number = higher priority).
+
+config SUPERVISOR_PRIORITY
+	int "Supervisor thread priority"
+	default 7
+	range 0 15
+	help
+	  Priority of the supervisor thread (lower number = higher priority).
+
+config SAFETY_MONITOR_CHECK_INTERVAL_MS
+	int "Safety monitor check interval (ms)"
+	default 500
+	range 100 5000
+	help
+	  Interval in milliseconds between safety monitor checks.
+
+config SAFETY_MONITOR_MAX_RUNTIME_MINUTES
+	int "Safety monitor maximum pump runtime (minutes)"
+	default 30
+	range 5 120
+	help
+	  Maximum allowed pump runtime in minutes before emergency stop.
+
+config SAFETY_MONITOR_WARNING_THRESHOLD_MINUTES
+	int "Safety monitor warning threshold (minutes)"
+	default 25
+	range 1 120
+	help
+	  Runtime threshold in minutes when warnings are issued before emergency stop.
+
+config UI_MANAGER_STACK_SIZE
+	int "UI manager thread stack size (bytes)"
+	default 8192
+	help
+	  Stack size for the UI manager thread in bytes.
+
+config UI_MANAGER_PRIORITY
+	int "UI manager thread priority"
+	default 4
+	range 0 15
+	help
+	  Priority of the UI manager thread (lower number = higher priority).
+
+endmenu
+
+endmenu
