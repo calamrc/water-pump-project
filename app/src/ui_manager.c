@@ -10,6 +10,7 @@
 #include "input/input_manager.h"
 #include "timer/timer_state_machine.h"
 #include "thread_comm.h"
+#include <app/drivers/feedback_relay.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -130,6 +131,19 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
                             last_timer_update = now;
                             display_needs_update = true;
                         } else if (event.button_press == BUTTON_PRESS_LONG) {
+                            /* Manual test: fire 1-second pulse on feedback relay */
+                            const struct device *feedback = 
+                                FEEDBACK_RELAY_DT_GET(DT_NODELABEL(feedback_relay));
+                            if (device_is_ready(feedback)) {
+                                LOG_INF("Manual test pulse (1s) on feedback relay");
+                                int ret = feedback_relay_pulse(feedback, 1000);
+                                if (ret < 0) {
+                                    LOG_ERR("Manual feedback pulse failed (%d)", ret);
+                                }
+                            } else {
+                                LOG_ERR("Feedback relay device not ready for manual test");
+                            }
+
                             LOG_INF("Action: RESET");
                             timer_sm_reset();
                             display_needs_update = true;
@@ -195,6 +209,21 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
                 LOG_DBG("Timer: %02u:%02u (state=%s)", 
                         minutes, seconds,
                         timer_sm_state_to_string(timer_sm_get_state()));
+            }
+
+            /* Auditory feedback: pulse relay for last 10 seconds (async) */
+            if (timer_sm_get_state() == TIMER_STATE_RUNNING) {
+                uint32_t remaining = timer_sm_get_remaining_seconds();
+                if (remaining <= 10 && remaining > 0) {
+                    const struct device *feedback = 
+                        FEEDBACK_RELAY_DT_GET(DT_NODELABEL(feedback_relay));
+                    if (device_is_ready(feedback)) {
+                        int ret = feedback_relay_pulse(feedback, 500);
+                        if (ret < 0) {
+                            LOG_WRN("Feedback relay pulse failed (%d)", ret);
+                        }
+                    }
+                }
             }
         }
 

@@ -36,12 +36,23 @@
 };
 
 / {
-	pump_controller: pump_controller {
-		compatible = "aygu,pump-controller";
-		relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
-		safety-timeout-min = <5>;
-		status = "okay";
-	};
+  pump_controller: pump_controller {
+    compatible = "aygu,pump-controller";
+    relay-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+    safety-timeout-min = <5>;
+    status = "okay";
+  };
+
+  feedback_relay: feedback_relay {
+    compatible = "aygu,feedback-relay";
+    /* Use open-drain so "off" releases the pin (Hi-Z).
+     * The relay module's internal 5V pull-up then pulls the line high,
+     * which the 5V relay module reliably interprets as OFF.
+     * This solves the 3.3V vs 5V logic level mismatch.
+     */
+    gpios = <&gpio0 13 GPIO_OPEN_DRAIN>;
+    status = "okay";
+  };
 
 	flow_sensor: flow-sensor {
 		compatible = "aygu,yf-s201c";

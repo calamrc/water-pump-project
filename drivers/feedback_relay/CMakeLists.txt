@@ -1,0 +1,1 @@
+zephyr_library_sources_ifdef(CONFIG_FEEDBACK_RELAY feedback_relay.c)

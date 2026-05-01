@@ -1,0 +1,14 @@
+config FEEDBACK_RELAY
+    bool "Feedback relay driver"
+    default y
+    depends on GPIO
+    help
+      Enable driver for relay used as auditory feedback (coil clicks).
+      Intended for countdown warning during the last 10 seconds of the timer.
+
+config FEEDBACK_RELAY_INIT_PRIORITY
+    int "Feedback relay init priority"
+    default 80
+    depends on FEEDBACK_RELAY
+    help
+      Initialization priority for the feedback relay driver.

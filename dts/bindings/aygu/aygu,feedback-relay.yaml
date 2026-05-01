@@ -1,0 +1,11 @@
+description: Relay for auditory feedback via coil click
+compatible: "aygu,feedback-relay"
+include: base.yaml
+
+properties:
+  gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO connected to feedback relay.
+      Active-low wiring: logic high turns relay ON (coil energized, produces click).
