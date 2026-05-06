@@ -3,70 +3,35 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <app/drivers/pump_controller.h>
-#include <app/drivers/yf_s201c.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <app_version.h>
-#include "fixed_math.h"
-#include "error_handler.h"
-#include "flow_analyzer.h"
-#include "thread_manager.h"
-#include "ui_manager.h"
+
+#include "services/flow_service.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_APP_LOG_LEVEL);
 
-// Semaphore for event-driven sensor data signaling is now defined in thread_manager.c
-
-/**
- * @brief Main application entry point for Zephyr Water Pump control system
- *
- * @return Application exit code (0 for normal operation, never returns in production)
- */
 int main(void)
 {
-    int ret;
+    LOG_INF("========================================");
+    LOG_INF("ZEPHYR WATER PUMP - SERVICE ARCHITECTURE");
+    LOG_INF("Version: %s", APP_VERSION_STRING);
+    LOG_INF("========================================");
 
-    LOG_INF("Zephyr Water Pump Application %s", APP_VERSION_STRING);
-
-    // Initialize error handler first (critical for other modules)
-    ret = error_handler_init();
+    /* Start Flow Service */
+    int ret = flow_service_start();
     if (ret < 0) {
-        LOG_ERR("Could not initialize error handler (%d)", ret);
-        return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
+        LOG_ERR("Failed to start Flow Service (%d)", ret);
+        return ret;
     }
 
-    // Initialize flow analyzer
-    ret = flow_analyzer_init();
-    if (ret < 0) {
-        LOG_ERR("Could not initialize flow analyzer (%d)", ret);
-        return ERROR_REPORT_CRITICAL(ERROR_FLOW_CALCULATION_ERROR);
-    }
+    LOG_INF("Flow Service started - listening for flow pulses...");
 
-    // Initialize UI manager (display and input)
-    ret = ui_manager_init();
-    if (ret < 0) {
-        LOG_ERR("Could not initialize UI manager (%d)", ret);
-        return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
-    }
+    /* Future services will start here in later phases */
 
-    // Get pump controller device reference (driver initializes itself)
-    const struct device *pump = PUMP_CONTROLLER_DT_GET(DT_NODELABEL(pump_controller));
-    if (!device_is_ready(pump)) {
-        LOG_ERR("Pump controller device not ready");
-        return ERROR_REPORT_CRITICAL(ERROR_PUMP_GPIO_FAILED);
+    while (1) {
+        k_sleep(K_SECONDS(60));
     }
-
-    // Create and start all threads
-    ret = thread_manager_create_all_threads();
-    if (ret < 0) {
-        LOG_ERR("Failed to create threads (%d)", ret);
-        return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
-    }
-
-    // Monitor system health (this function never returns)
-    thread_manager_monitor_health();
 
     return 0;
 }

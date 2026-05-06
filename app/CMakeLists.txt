@@ -6,12 +6,14 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(app LANGUAGES C)
 
-# Include directories for UI modules
+# Include directories
 target_include_directories(app PRIVATE
   include
   include/display
   include/input
   include/timer
+  include/services
+  src
 )
 
 target_sources(app PRIVATE
@@ -23,4 +25,5 @@ target_sources(app PRIVATE
   src/display/display_manager.c
   src/input/input_manager.c
   src/timer/timer_state_machine.c
+  src/services/flow_service.c
 )

@@ -7,31 +7,27 @@
 #include <app/drivers/yf_s201c.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <zephyr/zbus/zbus.h>
 #include "thread_comm.h"
 #include "flow_analyzer.h"
 
 LOG_MODULE_REGISTER(thread_manager, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* Thread stack definitions */
-K_THREAD_STACK_DEFINE(sensor_monitor_stack, CONFIG_SENSOR_MONITOR_STACK_SIZE);
 K_THREAD_STACK_DEFINE(pump_controller_stack, CONFIG_PUMP_CONTROLLER_STACK_SIZE);
 K_THREAD_STACK_DEFINE(safety_monitor_stack, CONFIG_SAFETY_MONITOR_STACK_SIZE);
 K_THREAD_STACK_DEFINE(supervisor_stack, CONFIG_SUPERVISOR_STACK_SIZE);
 K_THREAD_STACK_DEFINE(ui_manager_stack, CONFIG_UI_MANAGER_STACK_SIZE);
 
 /* Thread control blocks */
-static struct k_thread sensor_monitor_thread_cb;
 static struct k_thread pump_controller_thread_cb;
 static struct k_thread safety_monitor_thread_cb;
 static struct k_thread supervisor_thread_cb;
 static struct k_thread ui_manager_thread_cb;
 
 /* Thread health monitoring */
-static struct thread_health_info thread_health[5];
+static struct thread_health_info thread_health[4];
 static int thread_health_count = 0;
-
-/* Message Queue Definition */
-K_MSGQ_DEFINE(sensor_data_msgq, sizeof(struct sensor_data_msg), CONFIG_APP_SENSOR_MSGQ_SIZE, 4);
 
 /* Semaphore Definition */
 K_SEM_DEFINE(pump_event_sem, 0, 10);
@@ -43,11 +39,10 @@ static struct k_poll_signal thread_health_signal;
 static bool system_shutdown_requested = false;
 static struct k_sem shutdown_sem;
 
-/* Sensor data semaphore for ISR-to-thread signaling */
+/* Sensor data semaphore for ISR-to-thread signaling (used by Flow Service) */
 K_SEM_DEFINE(data_sem, 0, 1);
 
 /* Forward declarations for thread entry functions */
-void sensor_monitor_thread(void *arg1, void *arg2, void *arg3);
 void pump_controller_thread(void *arg1, void *arg2, void *arg3);
 void safety_monitor_thread(void *arg1, void *arg2, void *arg3);
 void supervisor_thread(void *arg1, void *arg2, void *arg3);
@@ -204,17 +199,10 @@ int thread_manager_create_all_threads(void)
     /* Initialize shutdown semaphore */
     k_sem_init(&shutdown_sem, 0, 1);
 
-    /* Create Sensor Monitor Thread */
-    k_tid_t sensor_tid = k_thread_create(&sensor_monitor_thread_cb, sensor_monitor_stack,
-                                        K_THREAD_STACK_SIZEOF(sensor_monitor_stack),
-                                        sensor_monitor_thread, NULL, NULL, NULL,
-                                        CONFIG_SENSOR_MONITOR_PRIORITY, 0, K_NO_WAIT);
-    if (sensor_tid == NULL) {
-        LOG_ERR("Failed to create sensor monitor thread");
-        return -EAGAIN;
-    }
-    k_thread_name_set(&sensor_monitor_thread_cb, "sensor_mon");
-    thread_health_init(sensor_tid, "sensor_monitor", CONFIG_SENSOR_MONITOR_STACK_SIZE);
+    /* Sensor Monitor Thread moved to Flow Service in Phase 1
+     * (commented out to avoid duplicate sensor access)
+     */
+    /* k_tid_t sensor_tid = k_thread_create(...); */
 
     /* Create Pump Controller Thread */
     k_tid_t pump_tid = k_thread_create(&pump_controller_thread_cb, pump_controller_stack,
@@ -372,9 +360,6 @@ int thread_manager_shutdown_all_threads(void)
         bool all_exited = true;
 
         /* Check if threads are still running */
-        if (k_thread_join(&sensor_monitor_thread_cb, K_MSEC(100)) != 0) {
-            all_exited = false;
-        }
         if (k_thread_join(&pump_controller_thread_cb, K_MSEC(100)) != 0) {
             all_exited = false;
         }
@@ -409,72 +394,7 @@ int thread_manager_shutdown_all_threads(void)
     return 0;
 }
 
-/* Placeholder thread implementations - will be replaced in Phase 2-4 */
-/* Sensor monitor thread implementation */
-void sensor_monitor_thread(void *arg1, void *arg2, void *arg3)
-{
-    LOG_INF("Sensor monitor thread started");
-
-    /* Get flow sensor device reference */
-    const struct device *flow_sensor = DEVICE_DT_GET(DT_NODELABEL(flow_sensor));
-    if (!device_is_ready(flow_sensor)) {
-        LOG_ERR("Flow sensor device not ready in sensor monitor thread");
-        return;
-    }
-
-    /* Configure sensor for event-driven operation */
-    int ret = yf_s201c_set_data_semaphore(flow_sensor, &data_sem);
-    if (ret < 0) {
-        LOG_ERR("Could not configure sensor semaphore in sensor monitor thread (%d)", ret);
-        return;
-    }
-
-    static uint32_t sequence_counter = 0;
-
-    LOG_INF("Sensor monitor thread ready for data acquisition");
-
-    int64_t last_health_update = k_uptime_get();
-    
-    while (!thread_manager_is_shutdown_requested()) {
-        /* Wait for sensor data with timeout to allow periodic health updates */
-        if (k_sem_take(&data_sem, K_MSEC(1000)) == 0) {
-            /* Acquire and validate sensor data */
-            fixed_t flow_rate;
-            ret = yf_s201c_get_flow_rate(flow_sensor, &flow_rate);
-
-            if (ret == 0 && yf_s201c_is_data_valid(flow_sensor)) {
-                /* Forward to pump controller via message queue */
-                struct sensor_data_msg msg = {
-                    .flow_rate = flow_rate,
-                    .timestamp = k_uptime_get(),
-                    .data_valid = true,
-                    .sequence_number = sequence_counter++
-                };
-
-                ret = k_msgq_put(&sensor_data_msgq, &msg, K_NO_WAIT);
-                if (ret == 0) {
-                    LOG_DBG("Sensor data forwarded to pump controller (seq: %u, flow: %.2f L/min)",
-                           msg.sequence_number, (double)fixed_to_float(flow_rate));
-                    thread_health_update(k_current_get(), THREAD_HEALTH_OK, 1, 0);
-                } else {
-                    LOG_WRN("Failed to queue sensor data (%d)", ret);
-                    thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0, 1);
-                }
-            } else {
-                LOG_DBG("Invalid sensor data received");
-                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-            }
-            last_health_update = k_uptime_get();
-        } else {
-            /* Timeout - update health even when no data */
-            int64_t now = k_uptime_get();
-            if ((now - last_health_update) >= 1000) {
-                last_health_update = now;
-                thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
-            }
-        }
-    }
-}
+/* Legacy sensor_monitor_thread removed in Phase 1 - replaced by Flow Service */
 
 /* Pump controller thread implementation */
 void pump_controller_thread(void *arg1, void *arg2, void *arg3)
@@ -506,15 +426,13 @@ void pump_controller_thread(void *arg1, void *arg2, void *arg3)
     while (!thread_manager_is_shutdown_requested()) {
         struct sensor_data_msg msg;
 
-        /* Wait for sensor data from message queue with timeout when pump is on */
+        /* Legacy message queue path (will be replaced in Phase 1) */
         k_timeout_t timeout;
         if (pump_controller_is_on(pump) && latest_plateau_period > 0) {
-            /* Timeout after 1.5x plateau period, same as original logic */
-            int64_t timeout_us = latest_plateau_period * 15 / 10; // 1.5x plateau period
+            int64_t timeout_us = latest_plateau_period * 15 / 10;
             timeout_us = MIN(timeout_us, (int64_t)CONFIG_APP_MAX_TIMEOUT_US);
             timeout = K_USEC(timeout_us);
         } else {
-            /* When pump is off, use 1 second timeout to allow periodic health updates */
             timeout = K_MSEC(1000);
         }
 

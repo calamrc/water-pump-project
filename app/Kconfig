@@ -177,6 +177,23 @@ config UI_MANAGER_PRIORITY
 	help
 	  Priority of the UI manager thread (lower number = higher priority).
 
+config UI_WORKQ_STACK_SIZE
+	int "UI work queue stack size (bytes)"
+	default 4096
+	help
+	  Stack size for the dedicated cooperative UI work queue.
+
+config UI_WORKQ_PRIORITY
+	int "UI work queue priority"
+	default 5
+	range 0 15
+	help
+	  Priority of the dedicated UI work queue (cooperative, below UI thread).
+
 endmenu
+
+# Note: Runtime observers are disabled by default for simplicity.
+# Enable CONFIG_ZBUS_RUNTIME_OBSERVERS when dynamic thread subscription is needed
+# (e.g., future networking/OTA modules).
 
 endmenu
