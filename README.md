@@ -1,33 +1,38 @@
 # Zephyr Water Pump Application
-## Application Overview
 
-The Zephyr Water Pump application implements an intelligent water pump control system using flow rate feedback for demand-based pumping.
+[![Zephyr](https://img.shields.io/badge/Zephyr-RTOS-00AEEF.svg)](https://zephyrproject.org)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-### Key Features
+A reference implementation demonstrating **Zephyr RTOS** features with an intelligent water pump control system using flow rate feedback.
 
-#### Smart Flow Control
-- **Plateau Detection**: Advanced algorithm that monitors flow rate stability to detect optimal pump operation points
-- **Flow Rate Monitoring**: Real-time measurement using YF-S201C flow sensor (450 pulses per liter)
-- **Adaptive Thresholding**: Statistical analysis to distinguish between flow changes and noise
+## 🚀 Quick Start
 
-#### Safety Mechanisms
-- **Runtime Safety Timer**: Automatic pump shutdown after 5 minutes of continuous operation
-- **Stale Data Protection**: Pump shutdown on sensor data timeout
-- **Relay Control**: Safe pump on/off with error handling
+```bash
+west init -m https://github.com/calamrc/water-pump-project
+cd water-pump-project
+west update
+west build -b your_board app
+west flash
+```
 
-#### Signal Processing
-- **Median Filtering**: Robust period measurement filtering for sensor noise rejection
-- **Outlier Detection**: Statistical bounds checking for invalid measurements
-- **Debouncing**: Minimum period validation and consecutive invalid thresholds
+## ✨ Latest Features (master branch)
 
-### Architecture
+- Full UI: Rotary encoder + display + buttons
+- Auditory feedback relay (500ms pulse on countdown)
+- Supervisor thread with health monitoring
+- Advanced plateau detection & safety logic
+- Demand-based pump control with YF-S201C sensor
 
-The application uses Zephyr RTOS features for:
-- GPIO interrupts for sensor reading
-- Semaphore-based task synchronization
-- Kernel timers for safety timeout
-- Comprehensive logging for debugging and monitoring
+## 📋 Hardware
 
-### Hardware Interfaces
-- **Flow Sensor**: GPIO 23, falling edge interrupt
-- **Pump Relay**: GPIO 22, active low (0 = ON, 1 = OFF)
+See [doc/HARDWARE.md](doc/HARDWARE.md) for full wiring, BOM and photos.
+
+## 🛠️ Build & Run
+
+Full instructions in the docs folder.
+
+## 📊 Demo
+
+(Video coming soon)
+
+Made with ❤️ using Zephyr RTOS
