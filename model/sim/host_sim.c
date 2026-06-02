@@ -283,7 +283,6 @@ int main(int argc, char **argv) {
         /* contract already reset inside + set its pump_is_on=false */
         current_sm_state = PUMP_SM_STATE_OFF;
         pump_on = false;
-        last_pulse_time = sim_time;
         /* Do not deliver a pulse — none arrived */
         continue;
       }
@@ -318,7 +317,6 @@ int main(int argc, char **argv) {
         watchdog_timeouts++;  /* decided to fire */
         current_sm_state = PUMP_SM_STATE_OFF;
         pump_on = false;
-        last_pulse_time = sim_time;
         continue;
       }
     }
