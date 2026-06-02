@@ -443,11 +443,11 @@ int main(int argc, char **argv) {
    * gap injection has been removed because it is no longer required.
    */
 
+  double total_time = (n > 0) ? times[n - 1] : 0.0;
+
   free(times);
   free(flows);
   free(periods);
-
-  double total_time = (n > 0) ? times[n - 1] : 0.0;
 
   printf("\n=== Faithful Flow Stabilization Summary (original contract) ===\n");
   printf("Simulated duration          : %.1f seconds\n", total_time);

@@ -31,6 +31,9 @@ static struct k_thread flow_sensor_thread_cb;
 /* Semaphore used by the YF-S201C driver to signal new pulse data (ISR-safe) */
 K_SEM_DEFINE(flow_data_sem, 0, 1);
 
+/* Separate semaphore used to wake flow thread from wd_work (for contract gap check in flow thread context only) */
+K_SEM_DEFINE(wd_wake_sem, 0, 1);
+
 /* Flow processing context - owns filtering that used to be inside the driver */
 static struct flow_processor_ctx flow_ctx;
 
@@ -60,7 +63,7 @@ static atomic_t current_pump_on_cache = ATOMIC_INIT(0);
  * - Cancel on new pulse or pump off.
  * - last_suggested_us for tracking + on-trans arm fallback.
  */
-static int64_t last_suggested_us;
+static atomic_t last_suggested_us = ATOMIC_INIT(0); /* fits in 32-bit (capped at 1s); use atomic for cross workq/flow thread safety on 32-bit (esp32) */
 static atomic_t arm_watchdog_pending = ATOMIC_INIT(0);
 static struct k_work_delayable wd_work;
 
@@ -107,26 +110,11 @@ static void wd_timer_expiry(struct k_timer *t) {
  * Per design: separate from flow_sample per user decision on Open Q1. */
 static void wd_work_handler(struct k_work *w) {
   ARG_UNUSED(w);
-
-  double now_s = (double)k_uptime_get() / 1000.0;
-  bool pump_on = atomic_get(&current_pump_on_cache) != 0;
-
-  /* Use last known rate if tracked; 0 is safe for pure gap path (check is first in contract) */
-  fixed_t use_rate = 0; /* rate not critical for gap>1.5x decision */
-
-  struct flow_contract_result p = flow_contract_process_sample(
-      &flow_contract, use_rate, 0, now_s, pump_on);
-
-  if (p.watchdog_timeout) {
-    struct flow_event ev = {
-        .type = FLOW_EVENT_WATCHDOG_TIMEOUT,
-        .timestamp = k_uptime_get(),
-        .associated_period_us = last_suggested_us,
-    };
-    (void)zbus_chan_pub(&flow_event_chan, &ev, K_NO_WAIT);
-    LOG_INF("[FLOW] watchdog timeout (via k_work gap check) published to flow_event_chan");
-    k_timer_stop(&wd_timer);
-  }
+  /* Signal the flow thread (owner of contract) to perform the gap check.
+   * This ensures *all* contract mutations happen in flow thread context (serial
+   * with pulse path), fixing races on contract state and last_pulse_time.
+   * k_work is still used (per design) only to defer from timer IRQ to schedulable ctx. */
+  k_sem_give(&wd_wake_sem);
 }
 
 /* Arm one-shot k_timer for 1.5x suggested (from contract on good capture or trans).
@@ -138,7 +126,7 @@ static void arm_watchdog(int64_t timeout_us) {
   if (timeout_us > 1000000LL) {
     timeout_us = 1000000LL;
   }
-  last_suggested_us = timeout_us;
+  atomic_set(&last_suggested_us, (atomic_val_t)timeout_us);
   k_timer_start(&wd_timer, K_USEC(timeout_us), K_NO_WAIT);
   LOG_DBG("[FLOW] armed 1.5x watchdog timer for %lld us", timeout_us);
 }
@@ -147,7 +135,22 @@ static void arm_watchdog(int64_t timeout_us) {
 static void cancel_watchdog(void) {
   k_timer_stop(&wd_timer);
   (void)k_work_cancel_delayable(&wd_work);
+  k_sem_reset(&wd_wake_sem); /* discard any pending wd signal from work */
   LOG_DBG("[FLOW] canceled watchdog timer");
+}
+
+/* Helper to dedup the flow_event pub + log for WATCHDOG (used from pulse path
+ * when contract detects on late sample, and from wd gap path in flow thread).
+ * Per review nit. */
+static void publish_flow_watchdog_event(int64_t associated_period_us, const char *context) {
+  struct flow_event ev = {
+      .type = FLOW_EVENT_WATCHDOG_TIMEOUT,
+      .timestamp = k_uptime_get(),
+      .associated_period_us = associated_period_us,
+  };
+  (void)zbus_chan_pub(&flow_event_chan, &ev, K_NO_WAIT);
+  LOG_INF("[FLOW] watchdog timeout%s published to flow_event_chan",
+          context ? context : "");
 }
 
 static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
@@ -192,14 +195,42 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
     LOG_WRN("Failed to attach pump status listener for contract (%d)", ret);
   }
 
+  /* Bootstrap the pump cache immediately after attach (zbus has no replay of prior pubs).
+   * PumpService may have pub'd initial status during its init (before this thread's add_obs).
+   * This ensures authoritative current_pump_on for contract K selection even if attach races
+   * with early pubs (callers use short sleep but we make robust here). */
+  struct pump_status st0;
+  if (zbus_chan_read(&pump_status_chan, &st0, K_NO_WAIT) == 0) {
+    atomic_set(&current_pump_on_cache, st0.is_on ? 1 : 0);
+  }
+
   /* Init work for watchdog (timer already defined with K_TIMER_DEFINE) */
   k_work_init_delayable(&wd_work, wd_work_handler);
 
   int64_t last_hb = 0;
 
   while (1) {
+    /* Handle wd gap signal first (from k_work, which was posted by timer expiry).
+     * This performs the contract(0) *in flow thread context only*, serializing
+     * all contract state mutations with the pulse path (fixes concurrent access
+     * to analyzer/last_pulse_time etc, and post-cancel pollution of gap base time).
+     * Separate sem ensures wd wake doesn't masquerade as pulse data. */
+    if (k_sem_take(&wd_wake_sem, K_NO_WAIT) == 0) {
+      double now_s = (double)k_uptime_get() / 1000.0;
+      bool pump_on = atomic_get(&current_pump_on_cache) != 0;
+      struct flow_contract_result p = flow_contract_process_sample(
+          &flow_contract, 0, 0, now_s, pump_on);
+      if (p.watchdog_timeout) {
+        publish_flow_watchdog_event((int64_t)atomic_get(&last_suggested_us), " (via k_work signal to flow thread)");
+        k_timer_stop(&wd_timer);
+        /* Reset yf buffer (original timeout path) so subsequent get_recent in pulse path
+         * doesn't re-feed stale last good period and spuriously re-arm or re-detect. */
+        (void)yf_s201c_reset(flow_dev);
+      }
+    }
+
     if (k_sem_take(&flow_data_sem, K_MSEC(1000)) == 0) {
-      /* New pulse: cancel any armed watchdog (design: cancel on new pulse) */
+      /* New pulse: cancel any armed watchdog (design: cancel on new pulse) + clear wd signal */
       cancel_watchdog();
 
       /* Authoritative path: thin driver gives raw recent periods.
@@ -243,7 +274,7 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
 
         /* Track suggested for arming/logging (set on both gap and plateau paths in contract) */
         if (p.suggested_next_timeout_us > 0) {
-          last_suggested_us = p.suggested_next_timeout_us;
+          atomic_set(&last_suggested_us, (atomic_val_t)p.suggested_next_timeout_us);
         }
 
         if (p.watchdog_timeout) {
@@ -253,13 +284,7 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
            * Uses K_NO_WAIT best-effort (consistent with all other pubs/listeners
            * in services; zbus cb provides serialization but no full queuing).
            */
-          struct flow_event ev = {
-              .type = FLOW_EVENT_WATCHDOG_TIMEOUT,
-              .timestamp = k_uptime_get(),
-              .associated_period_us = filtered_period,
-          };
-          (void)zbus_chan_pub(&flow_event_chan, &ev, K_NO_WAIT);
-          LOG_INF("[FLOW] watchdog timeout published to flow_event_chan");
+          publish_flow_watchdog_event(filtered_period, " (pulse path)");
         }
 
         struct flow_sample sample = {
@@ -292,7 +317,7 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
      * owns arm per design). Checked on every wake (up to 1s latency acceptable). */
     if (atomic_get(&arm_watchdog_pending) != 0) {
       atomic_set(&arm_watchdog_pending, 0);
-      int64_t t = (last_suggested_us > 0) ? last_suggested_us : 1000000LL;
+      int64_t t = (atomic_get(&last_suggested_us) > 0) ? (int64_t)atomic_get(&last_suggested_us) : 1000000LL;
       arm_watchdog(t);
     }
 

@@ -27,6 +27,15 @@ static void pump_handle_flow_demand(const struct flow_sample *flow);
 LOG_MODULE_REGISTER(pump_service, CONFIG_APP_LOG_LEVEL);
 
 static enum pump_sm_state current_sm_state = PUMP_SM_STATE_OFF;
+/* NOTE: current_sm_state mutated from multiple listener cbs (on_flow_sample,
+ * on_pump_cmd, on_flow_event) which run in zbus observer contexts (potentially
+ * different threads from pubs). Best-effort K_NO_WAIT + zbus serialization
+ * assumed (consistent with safety_service etc). Documented per review Issue 6;
+ * add k_mutex if races observed in PR2+.
+ * Per review, added K_MUTEX + guards around mutations in handle/on_event/on_cmd
+ * (and wd path) for serialized access.
+ */
+static K_MUTEX_DEFINE(pump_sm_lock);
 static bool pump_device_ready = false;
 static const struct device *pump_dev;
 static int64_t pump_run_start_time = 0; /* when we last entered RUNNING */
@@ -85,6 +94,7 @@ static void pump_handle_flow_demand(const struct flow_sample *flow) {
   struct pump_demand_input in = {.flow = flow, .timer = NULL};
   struct pump_demand_result res;
 
+  k_mutex_lock(&pump_sm_lock, K_FOREVER);
   pump_demand_evaluate(&in, current_sm_state, &res);
 
   enum pump_sm_state next =
@@ -121,6 +131,7 @@ static void pump_handle_flow_demand(const struct flow_sample *flow) {
     pump_controller_update_plateau_period(pump_dev,
                                           res.updated_plateau_period_us);
   }
+  k_mutex_unlock(&pump_sm_lock);
 
   publish_pump_status_if_changed(false);
 }
@@ -131,6 +142,11 @@ ZBUS_LISTENER_DEFINE(pump_flow_listener, on_flow_sample);
  * FlowSensorService contract). In PR1 we attach and receive; actual SM drive
  * (PUMP_SM_EVENT_TIMEOUT) + turn_off in later PR. This sets up the seam for
  * correct watchdog without polluting flow_sample.
+ * NOTE: uses K_NO_WAIT inside zbus listener cb (triggered by pub from other
+ * thread). Best-effort per existing patterns (safety on_flow_sample etc.);
+ * zbus provides some cb serialization but concurrent pubs (flow+cmd+event)
+ * could race on current_sm_state without further protection (see review
+ * Issue 6; for PR2+ consider mutex or dedicated work/queue if observed).
  */
 static void on_flow_event(const struct zbus_channel *chan) {
   ARG_UNUSED(chan);
@@ -142,13 +158,19 @@ static void on_flow_event(const struct zbus_channel *chan) {
     /* Handle watchdog timeout from FlowSensorService (contract gap via 1.5x k_work).
      * Drive SM + driver off (before any valid gate). Separate from flow_sample data path. */
     LOG_INF("[PUMP] received FLOW_EVENT_WATCHDOG_TIMEOUT (gap detected by flow contract)");
+    k_mutex_lock(&pump_sm_lock, K_FOREVER);
     if (pump_sm_is_active(current_sm_state)) {
+      /* Use RESET (not TIMEOUT) for wd gap to land in OFF (simpler recovery on new flow;
+       * matches host_sim direct OFF, explicit OFF/RESET paths, and allows immediate
+       * PLATEAU_DETECTED -> STARTING on next plateau without extra RESET cmd).
+       * Service SM and driver both end in OFF state. */
       current_sm_state =
-          pump_sm_process_event(current_sm_state, PUMP_SM_EVENT_TIMEOUT);
+          pump_sm_process_event(current_sm_state, PUMP_SM_EVENT_RESET);
       (void)pump_controller_turn_off(pump_dev);
       pump_run_start_time = 0;
       LOG_INF("[PUMP] turned OFF due to FLOW_EVENT_WATCHDOG_TIMEOUT");
     }
+    k_mutex_unlock(&pump_sm_lock);
     publish_pump_status_if_changed(true);
   }
 }
@@ -164,6 +186,7 @@ static void on_pump_cmd(const struct zbus_channel *chan) {
     return;
   }
 
+  k_mutex_lock(&pump_sm_lock, K_FOREVER);
   switch (cmd.action) {
   case PUMP_CMD_OFF:
     current_sm_state =
@@ -194,6 +217,7 @@ static void on_pump_cmd(const struct zbus_channel *chan) {
   default:
     break;
   }
+  k_mutex_unlock(&pump_sm_lock);
 
   publish_pump_status_if_changed(true);
 }

@@ -21,10 +21,20 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
   result->primary_reason = PUMP_DEMAND_REASON_NONE;
   result->reason_str = "no decision";
 
+  bool pump_already_active = (current_state == PUMP_SM_STATE_RUNNING ||
+                              current_state == PUMP_SM_STATE_STARTING);
+
   if (!input || !input->flow || !input->flow->valid) {
     /* timer (if non-NULL) not yet used for decisions in PR1 (timer complete ->
      * off via other path) */
     result->reason_str = "no valid flow data";
+    /* Protect active pump from spurious off on invalid data (e.g. direct calls
+     * from host_sim/tests with !valid flow while running); 1.5x wd via event is
+     * the off path. Per review. */
+    if (pump_already_active) {
+      result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
+      result->reason_str = "pump running - invalid flow data (keep; 1.5x wd governs)";
+    }
     return;
   }
 
@@ -46,9 +56,9 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
    * - Once the pump is running, we still want fresh stable pulse periods
    *   to keep the 1.5x dynamic watchdog accurate, but new plateaus no
    *   longer act as "demand" events to keep the pump alive.
+   * (pump_already_active computed early, before valid check, per review for
+   * keep logic on !valid + active.)
    */
-  bool pump_already_active = (current_state == PUMP_SM_STATE_RUNNING ||
-                              current_state == PUMP_SM_STATE_STARTING);
 
   if (confirmed_plateau) {
     /* Always propagate updated_plateau on confirmed (for Phase A handoff to

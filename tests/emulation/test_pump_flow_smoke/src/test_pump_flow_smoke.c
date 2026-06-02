@@ -115,6 +115,12 @@ ZBUS_LISTENER_DEFINE(flow_sample_listener, flow_sample_listener_cb);
 static struct pump_status last_pump_status;
 static bool got_pump_status;
 
+/* PR2 tracking for plant-driven 20s assertions (first plateau -> on(>0), wd, toggles).
+ * Declared early to be visible to listener cbs below (fixes use-of-undeclared).
+ * Made volatile for cross-cb writes from zbus contexts (test smoke only). */
+static volatile bool saw_pump_on;
+static volatile int64_t captured_plateau_period_us;
+
 static void pump_status_listener_cb(const struct zbus_channel *chan) {
   if (chan == &pump_status_chan) {
     zbus_chan_read(&pump_status_chan, &last_pump_status, K_NO_WAIT);
@@ -141,10 +147,6 @@ static void flow_event_listener_cb(const struct zbus_channel *chan) {
 }
 
 ZBUS_LISTENER_DEFINE(flow_event_listener, flow_event_listener_cb);
-
-/* Tracking for PR2 assertions on 20s plant: first plateau -> on(>0), wd fires, toggles */
-static bool saw_pump_on;
-static int64_t captured_plateau_period_us;
 
 static void *pump_flow_smoke_setup(void) {
   (void)zbus_chan_add_obs(&flow_sample_chan, &flow_sample_listener, K_NO_WAIT);
@@ -323,9 +325,13 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
                "first confirmed plateau (while off) must lead to pump turn_on via demand");
   zassert_true(captured_plateau_period_us > 0,
                "should have captured >0 plateau period_us (for Phase A handoff to turn_on)");
-  /* wd may or may not have fired depending on exact last gaps vs sleep + fast mode, but check observable */
-  if (got_flow_event_watchdog) {
-    zassert_true(true, "watchdog FLOW_EVENT observed (good)");
+  /* wd may or may not have fired depending on exact last gaps vs sleep + fast mode (one-shot timing in emul);
+   * core Phase A handoff covered by saw_pump_on + period >0 asserts. No tautological assert. */
+  if (!got_flow_event_watchdog) {
+    /* optional in fast mode; do not assert failure */
+    printk("note: no FLOW_EVENT_WATCHDOG_TIMEOUT observed in this run (timing dependent)\n");
+  } else {
+    printk("note: FLOW_EVENT_WATCHDOG_TIMEOUT observed via real k_work path\n");
   }
   /* last status after drive+wd should reflect off if wd fired, but at min we saw on */
   zassert_true(got_pump_status || saw_pump_on,
@@ -368,6 +374,9 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
 ZTEST(pump_flow_smoke, test_timer_is_independent_from_pump) {
   (void)zbus_chan_add_obs(&pump_status_chan, &pump_status_listener, K_NO_WAIT);
   got_pump_status = false;
+  saw_pump_on = false;
+  captured_plateau_period_us = 0;
+  got_flow_event_watchdog = false;
 
   /* Publish timer completion */
   struct timer_status completed = {
@@ -391,6 +400,9 @@ ZTEST(pump_flow_smoke, test_timer_is_independent_from_pump) {
 ZTEST(pump_flow_smoke, test_timer_running_does_not_affect_pump) {
   (void)zbus_chan_add_obs(&pump_status_chan, &pump_status_listener, K_NO_WAIT);
   got_pump_status = false;
+  saw_pump_on = false;
+  captured_plateau_period_us = 0;
+  got_flow_event_watchdog = false;
 
   struct timer_status running = {
       .remaining_sec = 120,
@@ -429,6 +441,9 @@ ZTEST(pump_flow_smoke, test_timer_running_does_not_affect_pump) {
 ZTEST(pump_flow_smoke, test_pump_safety_timeout_behavior) {
   (void)zbus_chan_add_obs(&pump_status_chan, &pump_status_listener, K_NO_WAIT);
   got_pump_status = false;
+  saw_pump_on = false;
+  captured_plateau_period_us = 0;
+  got_flow_event_watchdog = false;
 
   /* Simulate a situation where safety timeout fires (in real system this
    * would come from PumpService internal safety or driver safety timer).
@@ -466,6 +481,9 @@ ZTEST(pump_flow_smoke, test_pump_safety_timeout_behavior) {
 ZTEST(pump_flow_smoke, test_watering_cycle_basic) {
   (void)zbus_chan_add_obs(&pump_status_chan, &pump_status_listener, K_NO_WAIT);
   got_pump_status = false;
+  saw_pump_on = false;
+  captured_plateau_period_us = 0;
+  got_flow_event_watchdog = false;
 
   /* Step 1: Generate flow pulses (this should eventually cause
    * FlowSensorService to publish) */
