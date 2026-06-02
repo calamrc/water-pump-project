@@ -109,15 +109,17 @@ static void pump_handle_flow_demand(const struct flow_sample *flow) {
       (void)pump_controller_turn_off(pump_dev);
       pump_run_start_time = 0;
       LOG_INF("[PUMP] Driver turned OFF");
-    } else if (current_sm_state == PUMP_SM_STATE_RUNNING &&
-               res.updated_plateau_period_us > 0) {
-      /* While already running, a good period was captured — refresh the
-       * driver's latest_plateau_period so the 1.5x pulse watchdog stays
-       * accurate.
-       */
-      pump_controller_update_plateau_period(pump_dev,
-                                            res.updated_plateau_period_us);
     }
+  }
+
+  /* Always consider period update for running (Phase B good periods for 1.5x,
+   * or after initial turn-on). Moved out of transition if() so refresh works
+   * on no-sm-change path too (using PLATEAU_DETECTED as harmless keep event
+   * from demand). */
+  if (current_sm_state == PUMP_SM_STATE_RUNNING &&
+      res.updated_plateau_period_us > 0) {
+    pump_controller_update_plateau_period(pump_dev,
+                                          res.updated_plateau_period_us);
   }
 
   publish_pump_status_if_changed(false);
@@ -137,10 +139,17 @@ static void on_flow_event(const struct zbus_channel *chan) {
     return;
   }
   if (ev.type == FLOW_EVENT_WATCHDOG_TIMEOUT) {
-    /* Stub: log for observability in PR1. Real action (timeout event to SM)
-     * deferred. */
-    LOG_INF(
-        "[PUMP] received FLOW_EVENT_WATCHDOG_TIMEOUT (action in follow-up)");
+    /* Handle watchdog timeout from FlowSensorService (contract gap via 1.5x k_work).
+     * Drive SM + driver off (before any valid gate). Separate from flow_sample data path. */
+    LOG_INF("[PUMP] received FLOW_EVENT_WATCHDOG_TIMEOUT (gap detected by flow contract)");
+    if (pump_sm_is_active(current_sm_state)) {
+      current_sm_state =
+          pump_sm_process_event(current_sm_state, PUMP_SM_EVENT_TIMEOUT);
+      (void)pump_controller_turn_off(pump_dev);
+      pump_run_start_time = 0;
+      LOG_INF("[PUMP] turned OFF due to FLOW_EVENT_WATCHDOG_TIMEOUT");
+    }
+    publish_pump_status_if_changed(true);
   }
 }
 

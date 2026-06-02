@@ -51,6 +51,12 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
                               current_state == PUMP_SM_STATE_STARTING);
 
   if (confirmed_plateau) {
+    /* Always propagate updated_plateau on confirmed (for Phase A handoff to
+     * turn_on(>0) in pump_handle + Phase B refresh). Per PR2 requirement. */
+    if (input->flow->period_us > 0) {
+      result->updated_plateau_period_us = input->flow->period_us;
+    }
+
     if (!pump_already_active) {
       /* Phase A (pump off or not yet stably running): a confirmed
        * plateau is a valid demand to turn the pump on.
@@ -69,19 +75,23 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
       result->reason_str =
           "pump running - plateau only for watchdog period refresh (no demand)";
 
-      /* Propagate the latest good period so the service can update the driver
+      /* Emit PLATEAU_DETECTED (no-op transition while RUNNING per SM table)
+       * so that pump_handle reaches the period update path even with no
+       * state change. (The 1.5x mechanism keeps pump alive; plateau is
+       * only for period harvest here.)
        */
-      if (input->flow->period_us > 0) {
-        result->updated_plateau_period_us = input->flow->period_us;
-      }
-
-      /* Do not emit PLATEAU_DETECTED here. The 1.5x pulse timing
-       * mechanism (not continuous plateau confirmation) is what keeps
-       * the pump running safely in the original design.
-       */
+      result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
     }
   } else {
     result->primary_reason = PUMP_DEMAND_REASON_NONE;
     result->reason_str = "no confirmed plateau from analyzer";
+  }
+
+  /* While pump active, do not let default RESET (from !plateau samples between
+   * confirms) force off via SM. Only flow_event WATCHDOG or timer/safety/cmds off.
+   * PLATEAU_DETECTED is no-op keep for RUNNING (per SM table). */
+  if (pump_already_active && result->recommended_event == PUMP_SM_EVENT_RESET) {
+    result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
+    result->reason_str = "pump running - no action this sample (1.5x wd governs)";
   }
 }

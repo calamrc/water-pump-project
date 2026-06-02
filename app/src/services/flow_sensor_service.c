@@ -11,6 +11,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/zbus/zbus.h>
+#include <zephyr/sys/atomic.h>
 
 #include <app/drivers/yf_s201c.h>
 
@@ -37,11 +38,37 @@ static struct flow_processor_ctx flow_ctx;
  * original plateau rules) */
 static struct flow_contract_state flow_contract;
 
+/* Monotonic sequence for published samples. File-static (was local static
+ * inside thread; moved per review for idiomatic scope, still inits once). */
+static uint32_t seq = 0;
+
 /* Cache of authoritative pump state from pump_status_chan. Safe default false
  * selects INITIAL_K. Listener callback updates ONLY the cache (per design:
- * minimal, no other side effects here).
+ * minimal, no other side effects here). Uses Zephyr atomic_t for cross-thread
+ * safety (written by PumpService's zbus cb thread, read by flow thread).
+ * Matches project pattern in input_manager.c (no C11 stdatomic).
  */
-static bool current_pump_on_cache = false;
+static atomic_t current_pump_on_cache = ATOMIC_INIT(0);
+
+/* Watchdog timer + work for 1.5x gap detection per design (PR2).
+ * - k_timer one-shot armed to suggested (or 1.5x); expiry only posts work (ISR safe).
+ * - k_work_delayable defers execution; handler does contract(now,0) + flow_event pub.
+ * - All contract calls (pulse + gap) effectively serialized via flow thread or
+ *   work (no concurrent when gaps); listener only touches cache + arm flag.
+ * - Arm on good_period_captured (from pulse path) or on-pump-on transition (via flag
+ *   checked in flow thread).
+ * - Cancel on new pulse or pump off.
+ * - last_suggested_us for tracking + on-trans arm fallback.
+ */
+static int64_t last_suggested_us;
+static atomic_t arm_watchdog_pending = ATOMIC_INIT(0);
+static struct k_work_delayable wd_work;
+
+/* Forward decls so K_TIMER_DEFINE can reference */
+static void wd_timer_expiry(struct k_timer *t);
+static void wd_work_handler(struct k_work *w);
+
+K_TIMER_DEFINE(wd_timer, wd_timer_expiry, NULL);
 
 static void on_pump_status_for_contract(const struct zbus_channel *chan) {
   ARG_UNUSED(chan);
@@ -49,10 +76,79 @@ static void on_pump_status_for_contract(const struct zbus_channel *chan) {
   if (zbus_chan_read(&pump_status_chan, &st, K_NO_WAIT) != 0) {
     return;
   }
-  current_pump_on_cache = st.is_on;
+  bool was_on = atomic_get(&current_pump_on_cache) != 0;
+  bool is_on = st.is_on;
+  atomic_set(&current_pump_on_cache, is_on ? 1 : 0);
+
+  if (!was_on && is_on) {
+    /* Signal flow thread (owns arm/cancel per design) to arm using last suggested
+     * (or fallback). Listener remains minimal (only cache + flag). */
+    atomic_set(&arm_watchdog_pending, 1);
+    /* No sem give: 1s take timeout in flow thread is sufficient for arming latency */
+  } else if (was_on && !is_on) {
+    k_timer_stop(&wd_timer);
+    (void)k_work_cancel_delayable(&wd_work);
+  }
+  /* best-effort (K_NO_WAIT + zbus listener cb serialization assumed);
+   * see Issue 6 in review for PR2+ queueing if races on high-rate events.
+   * cache read in flow thread for contract K selection. */
 }
 
 ZBUS_LISTENER_DEFINE(flow_pump_status_listener, on_pump_status_for_contract);
+
+/* k_timer expiry: ONLY schedule the work (never mutate contract or pub from here) */
+static void wd_timer_expiry(struct k_timer *t) {
+  ARG_UNUSED(t);
+  k_work_schedule(&wd_work, K_NO_WAIT);
+}
+
+/* Work handler: runs contract with period=0 to let gap logic fire exactly at 1.5x.
+ * Pubs lightweight flow_event (not sample) on timeout. In flow/work context.
+ * Per design: separate from flow_sample per user decision on Open Q1. */
+static void wd_work_handler(struct k_work *w) {
+  ARG_UNUSED(w);
+
+  double now_s = (double)k_uptime_get() / 1000.0;
+  bool pump_on = atomic_get(&current_pump_on_cache) != 0;
+
+  /* Use last known rate if tracked; 0 is safe for pure gap path (check is first in contract) */
+  fixed_t use_rate = 0; /* rate not critical for gap>1.5x decision */
+
+  struct flow_contract_result p = flow_contract_process_sample(
+      &flow_contract, use_rate, 0, now_s, pump_on);
+
+  if (p.watchdog_timeout) {
+    struct flow_event ev = {
+        .type = FLOW_EVENT_WATCHDOG_TIMEOUT,
+        .timestamp = k_uptime_get(),
+        .associated_period_us = last_suggested_us,
+    };
+    (void)zbus_chan_pub(&flow_event_chan, &ev, K_NO_WAIT);
+    LOG_INF("[FLOW] watchdog timeout (via k_work gap check) published to flow_event_chan");
+    k_timer_stop(&wd_timer);
+  }
+}
+
+/* Arm one-shot k_timer for 1.5x suggested (from contract on good capture or trans).
+ * Update last_suggested for logging + fallback arm. Cap at MAX per contract. */
+static void arm_watchdog(int64_t timeout_us) {
+  if (timeout_us <= 0) {
+    timeout_us = 1000000LL; /* fallback 1s */
+  }
+  if (timeout_us > 1000000LL) {
+    timeout_us = 1000000LL;
+  }
+  last_suggested_us = timeout_us;
+  k_timer_start(&wd_timer, K_USEC(timeout_us), K_NO_WAIT);
+  LOG_DBG("[FLOW] armed 1.5x watchdog timer for %lld us", timeout_us);
+}
+
+/* Cancel any armed watchdog (on new pulse or off transition). */
+static void cancel_watchdog(void) {
+  k_timer_stop(&wd_timer);
+  (void)k_work_cancel_delayable(&wd_work);
+  LOG_DBG("[FLOW] canceled watchdog timer");
+}
 
 static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
   ARG_UNUSED(arg1);
@@ -96,11 +192,16 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
     LOG_WRN("Failed to attach pump status listener for contract (%d)", ret);
   }
 
-  static uint32_t seq = 0;
+  /* Init work for watchdog (timer already defined with K_TIMER_DEFINE) */
+  k_work_init_delayable(&wd_work, wd_work_handler);
+
   int64_t last_hb = 0;
 
   while (1) {
     if (k_sem_take(&flow_data_sem, K_MSEC(1000)) == 0) {
+      /* New pulse: cancel any armed watchdog (design: cancel on new pulse) */
+      cancel_watchdog();
+
       /* Authoritative path: thin driver gives raw recent periods.
        * FlowSensorService owns all processing via flow_processor.
        */
@@ -131,7 +232,7 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
         double now_s = (double)k_uptime_get() / 1000.0;
         struct flow_contract_result p = flow_contract_process_sample(
             &flow_contract, rate, filtered_period, now_s,
-            current_pump_on_cache); /* authoritative from pump_status sub ->
+            atomic_get(&current_pump_on_cache) != 0); /* authoritative from pump_status sub (atomic) ->
                                        correct K and Phase B */
 
         bool plateau = p.plateau_confirmed;
@@ -140,10 +241,17 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
           LOG_DBG("[FLOW] Analyzer reset performed by contract");
         }
 
+        /* Track suggested for arming/logging (set on both gap and plateau paths in contract) */
+        if (p.suggested_next_timeout_us > 0) {
+          last_suggested_us = p.suggested_next_timeout_us;
+        }
+
         if (p.watchdog_timeout) {
           /* Per design: publish to lightweight flow_event_chan (not to sample).
            * PumpService (and others) will listen; no control bits on
            * measurement samples.
+           * Uses K_NO_WAIT best-effort (consistent with all other pubs/listeners
+           * in services; zbus cb provides serialization but no full queuing).
            */
           struct flow_event ev = {
               .type = FLOW_EVENT_WATCHDOG_TIMEOUT,
@@ -170,7 +278,22 @@ static void flow_sensor_thread(void *arg1, void *arg2, void *arg3) {
         } else if (ret != -EBUSY) {
           LOG_WRN("zbus pub failed (%d)", ret);
         }
+
+        /* Arm (or re-arm) on good_period_captured (covers Phase A first plateau
+         * too, since contract sets good + suggested even when passed pump_on=false
+         * for the demand_event case). */
+        if (p.good_period_captured && p.suggested_next_timeout_us > 0) {
+          arm_watchdog(p.suggested_next_timeout_us);
+        }
       }
+    }
+
+    /* Check arm request from pump on-transition (listener sets flag; flow thread
+     * owns arm per design). Checked on every wake (up to 1s latency acceptable). */
+    if (atomic_get(&arm_watchdog_pending) != 0) {
+      atomic_set(&arm_watchdog_pending, 0);
+      int64_t t = (last_suggested_us > 0) ? last_suggested_us : 1000000LL;
+      arm_watchdog(t);
     }
 
     /* Heartbeat when idle */

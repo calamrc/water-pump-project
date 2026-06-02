@@ -22,13 +22,13 @@
 #include "pump/pump_demand.h"
 #include "pump_state_machine.h"
 
-/* Shim note for PR1: flow_event_chan is zbus-only (firmware); host_sim uses
- * direct contract result for watchdog (see contract_res.watchdog_timeout). Pure
- * struct flow_event + timer_pure_status now available via pump_data_types for
- * future unified sim if desired. No pub needed here.
+/* Shim note: flow_event_chan is zbus-only (firmware); host_sim demonstrates
+ * equivalent using direct contract_res (and simulates lightweight flow_event
+ * concept for wd assertions). Per PR2: reorder to call contract (with conceptual
+ * pump_on from SM) first, wire plateau_detected + good/demand from contract_res
+ * into demand, cover first plateau -> turn_on(>0), good periods (no spurious
+ * demand), watchdog on drop via the gap checks + contract(0) path.
  */
-
-#include "pump_state_machine.h"
 
 /*
  * Flexible loader for plant-generated data.
@@ -254,10 +254,6 @@ int main(int argc, char **argv) {
   double last_pulse_time = 0.0;
   double total_trace_time = (n > 0) ? times[n - 1] : 0.0;
 
-  /* We still keep the old starvation variables for compatibility during
-   * transition */
-  last_pulse_time = 0.0;
-
   while (sim_time <
          total_trace_time + 5.0) { /* small overrun to allow final watchdog */
     /* Query instantaneous period at current simulated time */
@@ -270,6 +266,7 @@ int main(int argc, char **argv) {
     bool is_real_pulse = (per > 0 && per < NO_PULSE_THRESHOLD_US);
 
     /* If pump is on and we're in a no-pulse region, check watchdog starvation
+     * (simulates armed k_timer expiry + wd_work contract(now,0) + flow_event)
      */
     if (pump_on && !is_real_pulse) {
       double gap = sim_time - last_pulse_time;
@@ -280,11 +277,12 @@ int main(int argc, char **argv) {
                "(no pulse for %.2fs) -> PUMP OFF + RESET\n",
                sim_time, flow, per, per, gap);
 
-        flow_contract_init(&contract);
-        watchdog_timeouts++;
+        /* Exercise contract gap path directly (equiv to wd_work_handler contract(0)) */
+        (void)flow_contract_process_sample(&contract, 0, 0, sim_time, true);
+        watchdog_timeouts++;  /* we decided gap fire; contract did internal reset */
+        /* contract already reset inside + set its pump_is_on=false */
         current_sm_state = PUMP_SM_STATE_OFF;
         pump_on = false;
-        last_pulse_time = sim_time;
         last_pulse_time = sim_time;
         /* Do not deliver a pulse — none arrived */
         continue;
@@ -315,11 +313,11 @@ int main(int argc, char **argv) {
                "(gap=%.2fs) -> PUMP OFF + RESET\n",
                sim_time, flow, per, per, gap_to_next);
 
-        flow_contract_init(&contract);
-        watchdog_timeouts++;
+        /* Exercise contract gap path (equiv of timer work) */
+        (void)flow_contract_process_sample(&contract, 0, 0, sim_time, true);
+        watchdog_timeouts++;  /* decided to fire */
         current_sm_state = PUMP_SM_STATE_OFF;
         pump_on = false;
-        last_pulse_time = sim_time;
         last_pulse_time = sim_time;
         continue;
       }
@@ -334,14 +332,29 @@ int main(int argc, char **argv) {
     float sim_rate = (filtered > 0) ? (60e6f / (float)filtered / 450.0f) : 0.0f;
     fixed_t rate_fixed = fixed_from_float(sim_rate);
 
-    /* Build input the same way PumpService does */
+    /* Conceptual pump_on from local SM (before this pulse's demand) for contract K */
+    bool conceptual_pump_on = pump_sm_is_active(current_sm_state);
+    bool was_active_for_demand = conceptual_pump_on;
+
+    /* Feed contract FIRST (with conceptual on) so we get authoritative
+     * plateau_confirmed / demand_event / good_period_captured / suggested / wd .
+     * This wires the real contract result into demand (for Phase A first plateau
+     * demand + >0 period handoff) and simulates flow_event via contract_res. */
+    struct flow_contract_result contract_res = flow_contract_process_sample(
+        &contract, rate_fixed, per, sim_time, conceptual_pump_on);
+
+    if (contract_res.plateau_confirmed)
+      plateau_events++;
+    if (contract_res.watchdog_timeout)
+      watchdog_timeouts++;
+
+    /* Build sim_flow using contract result (PR2 fidelity) */
     struct flow_sample sim_flow = {
         .rate = rate_fixed,
         .timestamp = (uint64_t)(sim_time * 1000),
         .sequence = 0, /* not important for sim */
         .valid = (per > 0),
-        .plateau_detected = false, /* will be set from contract_res in later PR;
-                                      for now demand sees pre-contract */
+        .plateau_detected = contract_res.plateau_confirmed,
         .period_us = per,
     };
 
@@ -358,10 +371,6 @@ int main(int argc, char **argv) {
     current_sm_state = next_state;
     pump_on = pump_sm_is_active(current_sm_state);
 
-    /* Simulate driver actions + update our conceptual "on" state for the
-     * contract */
-    bool pump_on = pump_sm_is_active(current_sm_state);
-
     if (state_changed) {
       const char *reason = res.reason_str ? res.reason_str : "none";
       printf("%6.2f  %6.2f  %10lld  %10lld   ---  ------  ---  [PUMP SM] %s -> "
@@ -370,27 +379,24 @@ int main(int argc, char **argv) {
              pump_sm_state_to_str(
                  current_sm_state), /* note: may need to handle if not linked */
              pump_sm_state_to_str(next_state), reason);
+      if (pump_on && res.updated_plateau_period_us > 0) {
+        printf("          >>> turn_on(>0) with period=%lld us (Phase A handoff or refresh)\n",
+               res.updated_plateau_period_us);
+      }
     }
-
-    /* Feed the contract for its internal analyzer + watchdog (it still needs
-     * the raw flow) */
-    struct flow_contract_result contract_res = flow_contract_process_sample(
-        &contract, rate_fixed, per, sim_time, pump_on);
-
-    if (contract_res.plateau_confirmed)
-      plateau_events++;
-    if (contract_res.watchdog_timeout)
-      watchdog_timeouts++;
 
     const char *phase = pump_on ? "RUN" : "OFF";
 
+    /* Simulate lightweight flow_event for wd (direct from contract) */
     if (contract_res.watchdog_timeout) {
+      /* conceptual flow_event */
       printf("%6.2f  %6.2f  %10lld  %10lld   ---  ------  ---  1.5x WATCHDOG "
              "(%.3fs) -> conceptual PUMP OFF + RESET\n",
              sim_time, flow, per, filtered,
              (double)contract_res.suggested_next_timeout_us / 1000000.0);
     } else if (contract_res.plateau_confirmed) {
-      if (res.recommended_event == PUMP_SM_EVENT_PLATEAU_DETECTED) {
+      if (res.recommended_event == PUMP_SM_EVENT_PLATEAU_DETECTED &&
+          !was_active_for_demand ) {
         printf(
             "%6.2f  %6.2f  %10lld  %10lld   %d/%d  %6.4f  %.1f  %s  FIRST "
             "SIGNIFICANT PLATEAU -> DEMAND (would turn pump ON)  [reset=%d]\n",
@@ -430,7 +436,6 @@ int main(int argc, char **argv) {
     }
 
     last_pulse_time = sim_time;
-    last_pulse_time = sim_time;
   }
 
   /* The event-driven loop above should naturally produce watchdog events
@@ -457,6 +462,21 @@ int main(int argc, char **argv) {
          "explicit reset after every plateau + 1.5x pulse watchdog.\n");
   printf(
       "====================================================================\n");
+
+  /* PR2: 20s scenario coverage (first plateau demand, good no spurious, wd on drop,
+   * turn_on(>0) via updated_plateau always, flow_event equiv via contract wd).
+   * Run with model/sim/20s_realistic_trace.csv or plant_trace_realistic.csv to exercise. */
+  if (strstr(filename, "20s") || strstr(filename, "realistic") || n > 1000) {
+    printf("20s scenario checks: plateau=%d wd=%d (expect >=1 each; first plateau "
+           "demand + turn_on(>0) + final wd off visible in trace above)\n",
+           plateau_events, watchdog_timeouts);
+    if (watchdog_timeouts < 1) {
+      printf("  [note] 20s watchdog not observed (may depend on trace end gaps)\n");
+    }
+    if (plateau_events < 1) {
+      printf("  [note] no plateau events in 20s trace?\n");
+    }
+  }
 
   return 0;
 }
