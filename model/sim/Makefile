@@ -17,6 +17,8 @@ host_sim: host_sim.c host_shims.c
 		$(APP_DIR)/src/pump/flow_stabilization_contract.c \
 		$(APP_DIR)/src/flow_analyzer_core.c \
 		-o host_sim -lm
+# PR4: pures sufficient (demand+contract+sm+processor+analyzer_core); timer pure
+# is header-only (pump_data_types.h) and passed as NULLable to demand_evaluate.
 
 clean:
 	rm -f host_sim

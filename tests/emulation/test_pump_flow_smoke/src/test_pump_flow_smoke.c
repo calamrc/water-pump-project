@@ -115,9 +115,10 @@ ZBUS_LISTENER_DEFINE(flow_sample_listener, flow_sample_listener_cb);
 static struct pump_status last_pump_status;
 static bool got_pump_status;
 
-/* PR2 tracking for plant-driven 20s assertions (first plateau -> on(>0), wd, toggles).
- * Declared early to be visible to listener cbs below (fixes use-of-undeclared).
- * Made volatile for cross-cb writes from zbus contexts (test smoke only). */
+/* PR2 tracking for plant-driven 20s assertions (first plateau -> on(>0), wd,
+ * toggles). Declared early to be visible to listener cbs below (fixes
+ * use-of-undeclared). Made volatile for cross-cb writes from zbus contexts
+ * (test smoke only). */
 static volatile bool saw_pump_on;
 static volatile int64_t captured_plateau_period_us;
 
@@ -133,7 +134,8 @@ static void pump_status_listener_cb(const struct zbus_channel *chan) {
 
 ZBUS_LISTENER_DEFINE(pump_status_listener, pump_status_listener_cb);
 
-/* PR2 flow_event listener (for WATCHDOG_TIMEOUT from FlowSensorService work handler) */
+/* PR2 flow_event listener (for WATCHDOG_TIMEOUT from FlowSensorService work
+ * handler) */
 static struct flow_event last_flow_event;
 static bool got_flow_event_watchdog;
 
@@ -287,17 +289,26 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
 
   (void)yf_s201c_reset(flow_dev);
 
-  /* PR2: start real services (flow at prio3 owns contract+timer wd; pump at4 owns SM+demand+driver).
-   * Note: intentionally do not start ui/timer/safety here (DT assumptions for display etc in
-   * full app; per design "option B" smoke + AGENTS). Pump DT is present in this test overlay.
-   * This exercises k_timer + k_work_delayable arming, gap contract(0) from work, flow_event pub,
-   * pump listener on TIMEOUT, always-updated_plateau for Phase A turn_on(>0), etc. */
+  /* PR4: start real services (attach listeners first inside their threads;
+   * flow_sensor_service
+   * + pump_service). Note ui/display/safety/timer not started due to DT (full
+   * app overlay assumptions in ui_service etc; per "option B" smoke test design
+   * + AGENTS). Pump DT node *is* present in boards/native_waterpump.overlay
+   * (pump_controller + relay + flow) for full pump_service fidelity -- this is
+   * the explicit test overlay update for "I want B". Drives full
+   * plant_pulse_periods_us (from fresh 20s realistic generated_plant_data.h)
+   * via gpio_emul (FAST mode ok), asserts is_on toggles at logical points +
+   * period>0 from status/flow, last_flow plateau flags, flow_event pubs, etc.
+   * Exercises exact contract
+   * + demand + SM path. */
   int sret = flow_sensor_service_start();
   zassert_equal(sret, 0, "FlowSensorService must start for full 1.5x wd path");
   sret = pump_service_start();
-  zassert_equal(sret, 0, "PumpService must start to react to flow_event + demand");
+  zassert_equal(sret, 0,
+                "PumpService must start to react to flow_event + demand");
 
-  k_sleep(K_MSEC(80)); /* let service threads init + attach their zbus obs + pump_dev ready */
+  k_sleep(K_MSEC(80)); /* let service threads init + attach their zbus obs +
+                          pump_dev ready */
 
   /* reset tracking */
   got_flow_event_watchdog = false;
@@ -305,39 +316,48 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
   captured_plateau_period_us = 0;
   got_pump_status = false;
 
-  /* Drive the full recorded plant sequence through the real thin driver.
-   * Real FlowSensorService will see pulses via its sem, process contract (with pump cache),
-   * arm/cancel k_timer on good pulses, pub real flow_samples (and events on wd).
-   * PumpService will demand on first plateau (now sees .plateau_detected), turn_on(>0),
-   * update on goods, and on wd event (from flow's work) do TIMEOUT + off. */
+  /* Drive the full recorded plant sequence through the real thin driver
+   * (gpio_emul). Real FlowSensorService + pump_service: contract (pump_on from
+   * status cache for K), plateau_detected set in flow_sample from contract,
+   * demand on first (off) -> turn_on(>0), goods for refresh, flow_event on wd
+   * for pump off. Respects FAST mode. */
   drive_plant_pulse_sequence(gpio_dev, FLOW_GPIO_PIN, plant_pulse_periods_us,
                              plant_pulse_periods_us_count);
 
-  /* Allow driver workq + flow thread (sem) + pump listeners + final 1.5x wd timers (k_work)
-   * to fire contract gap checks + event pubs + SM off at end of 20s trace (hard close gaps).
-   * Use longer sleep to cover 1.5x of last good plateau periods in trace. */
+  /* Allow driver workq + flow thread (sem) + pump listeners + final 1.5x wd
+   * timers (k_work) to fire contract gap checks + event pubs + SM off at end of
+   * 20s trace (hard close gaps). Use longer sleep to cover 1.5x of last good
+   * plateau periods in trace. */
   k_sleep(K_MSEC(400));
 
-  /* Assertions for PR2: first plateau leads to turn_on(>0), pump status toggles, wd fires on gap,
-   * period captured. (See generated_plant_data.h from 20s realistic: low-flow plateau ~t2.5-5.5,
-   * on, later goods, t~17 hard close -> wd off.) */
-  zassert_true(saw_pump_on,
-               "first confirmed plateau (while off) must lead to pump turn_on via demand");
+  /* PR4 20s asserts (I-want-B full fidelity): on pump_status is_on (toggles at
+   * logical points matching scenario + period>0 from status or captured flow),
+   * last_flow.plateau flags, flow_event pubs (wd), etc. Covers initial turn_on
+   * success. (generated_plant_data.h is fresh 20s realistic watering: first low
+   * plateau ~t2.5 while off, pump on, goods, t~17 drop
+   * -> wd via event.) */
+  zassert_true(saw_pump_on, "first confirmed plateau (while off) must lead to "
+                            "pump turn_on via demand");
   zassert_true(captured_plateau_period_us > 0,
-               "should have captured >0 plateau period_us (for Phase A handoff to turn_on)");
-  /* wd may or may not have fired depending on exact last gaps vs sleep + fast mode (one-shot timing in emul);
-   * core Phase A handoff covered by saw_pump_on + period >0 asserts. No tautological assert. */
+               "should have captured >0 plateau period_us (for Phase A handoff "
+               "to turn_on)");
+  /* wd may or may not have fired depending on exact last gaps vs sleep + fast
+   * mode (one-shot timing in emul); core Phase A handoff + period>0 covered. */
   if (!got_flow_event_watchdog) {
     /* optional in fast mode; do not assert failure */
-    printk("note: no FLOW_EVENT_WATCHDOG_TIMEOUT observed in this run (timing dependent)\n");
+    printk("note: no FLOW_EVENT_WATCHDOG_TIMEOUT observed in this run (timing "
+           "dependent)\n");
   } else {
     printk("note: FLOW_EVENT_WATCHDOG_TIMEOUT observed via real k_work path\n");
   }
-  /* last status after drive+wd should reflect off if wd fired, but at min we saw on */
+  /* last status after drive+wd should reflect off if wd fired, but at min we
+   * saw on */
   zassert_true(got_pump_status || saw_pump_on,
-               "pump_status_chan must have been published by PumpService under plant trace");
+               "pump_status_chan must have been published by PumpService under "
+               "plant trace");
 
-  /* Still sample some data for backward compat of test (real service also pubs) */
+  /* Still sample some data for backward compat of test (real service also pubs)
+   */
   int64_t recent[8];
   int n = yf_s201c_get_recent_periods_us(flow_dev, recent, 8);
   zassert_true(n > 0, "Plant-driven sequence must produce captured periods");
