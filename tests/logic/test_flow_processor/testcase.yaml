@@ -1,0 +1,7 @@
+tests:
+  logic.flow_processor:
+    tags: flow processor logic
+    platform_allow:
+      - native_sim
+      - qemu_x86
+    harness: ztest

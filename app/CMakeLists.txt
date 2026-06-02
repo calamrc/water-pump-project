@@ -13,17 +13,30 @@ target_include_directories(app PRIVATE
   include/input
   include/timer
   include/services
+  include/zbus
+  include/pump
   src
+  src/zbus
 )
 
 target_sources(app PRIVATE
   src/main.c
   src/flow_analyzer.c
   src/error_handler.c
-  src/thread_manager.c
-  src/ui_manager.c
   src/display/display_manager.c
   src/input/input_manager.c
   src/timer/timer_state_machine.c
-  src/services/flow_service.c
+  # Old flow_service.c fully removed during legacy cleanup.
+  # New zbus-centric services (Phase 1 skeletons + channels)
+  src/zbus/channels.c
+  src/services/flow_sensor_service.c
+  src/services/pump_service.c
+  src/services/timer_service.c
+  src/services/ui_service.c
+  src/services/safety_service.c
+  src/pump_state_machine.c
+  src/flow_processor.c
+  src/flow_analyzer_core.c
+  src/pump/pump_demand.c
+  src/pump/flow_stabilization_contract.c
 )

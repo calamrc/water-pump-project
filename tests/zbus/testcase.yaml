@@ -1,0 +1,7 @@
+tests:
+  zbus.contracts:
+    tags: zbus contracts
+    platform_allow:
+      - qemu_x86
+      - native_sim
+    harness: ztest

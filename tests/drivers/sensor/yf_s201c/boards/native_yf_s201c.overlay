@@ -1,0 +1,21 @@
+/*
+ * Overlay for YF-S201C driver unit tests.
+ * Binds the sensor to the gpio-emul instance provided by the test environment.
+ */
+
+/ {
+	flow_sensor: flow-sensor {
+		compatible = "aygu,yf-s201c";
+		gpios = <&gpio0 18 GPIO_PULL_UP>;
+		pulses-per-liter = <450>;
+		min-period-us = <100>;
+		buffer-size = <5>;
+		stale-threshold-ms = <200>;
+		consecutive-invalid-threshold = <5>;
+		status = "okay";
+	};
+};
+
+&gpio0 {
+	status = "okay";
+};

@@ -27,28 +27,6 @@ static inline fixed_t fixed_from_float(float f) {
  * ============================================================================ */
 
 /**
- * @brief Calculate median value from the period buffer
- */
-static int64_t yf_s201c_get_median(int64_t *arr, int size) {
-    int64_t sorted[5];
-
-    memcpy(sorted, arr, size * sizeof(int64_t));
-
-    // Simple bubble sort
-    for (int i = 0; i < size - 1; i++) {
-        for (int j = 0; j < size - i - 1; j++) {
-            if (sorted[j] > sorted[j + 1]) {
-                int64_t temp = sorted[j];
-                sorted[j] = sorted[j + 1];
-                sorted[j + 1] = temp;
-            }
-        }
-    }
-
-    return sorted[size / 2];
-}
-
-/**
  * @brief GPIO interrupt service routine
  */
 void yf_s201c_isr(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
@@ -90,69 +68,64 @@ void yf_s201c_isr(const struct device *port, struct gpio_callback *cb, gpio_port
 }
 
 /**
+ * @brief Store a new accepted raw period into the recent-period ring buffer.
+ *
+ * Driver is intentionally thin: it only performs basic electrical sanity
+ * (min_period check in ISR, consecutive-invalid ERROR state machine).
+ * All median filtering, outlier rejection, flow-rate calculation and
+ * validity policy now live in FlowSensorService + flow_processor (app layer).
+ */
+static void yf_s201c_process_period(struct yf_s201c_data *data, int64_t period_us)
+{
+	k_mutex_lock(&data->mutex, K_FOREVER);
+
+	/* Simple ring append of the raw accepted period (no median/outlier here) */
+	data->period_buffer[data->buffer_index] = period_us;
+	data->period_us = period_us;
+	data->buffer_index = (data->buffer_index + 1) % data->buffer_size;
+
+	if (data->valid_periods < data->buffer_size) {
+		data->valid_periods++;
+	}
+
+	k_mutex_unlock(&data->mutex);
+}
+
+/**
  * @brief Workqueue handler for deferred ISR processing
  */
 void yf_s201c_work_handler(struct k_work *work)
 {
-    struct yf_s201c_data *data = CONTAINER_OF(work, struct yf_s201c_data, work);
+	struct yf_s201c_data *data = CONTAINER_OF(work, struct yf_s201c_data, work);
 
-    if (data->isr_valid_update) {
-        // Valid period
-        data->consecutive_invalid = 0;
-        int64_t current_period_us = data->isr_current_period_us;
+	if (data->isr_valid_update) {
+		data->consecutive_invalid = 0;
+		int64_t current_period_us = data->isr_current_period_us;
 
-        // Protect period buffer
-        k_mutex_lock(&data->mutex, K_FOREVER);
+		yf_s201c_process_period(data, current_period_us);
 
-        if (data->valid_periods >= data->buffer_size) {
-            int64_t median = yf_s201c_get_median((int64_t *)data->period_buffer, data->buffer_size);
+		data->last_valid_update_ms = k_uptime_get();
+		data->state = YF_S201C_RUNNING;
 
-            // Outlier rejection
-            if (current_period_us < (median / 1.5) || current_period_us > (median * 1.5)) {
-                data->period_us = median;
-                data->period_buffer[data->buffer_index] = median;
-            } else {
-                data->period_us = current_period_us;
-                data->period_buffer[data->buffer_index] = current_period_us;
-            }
-        } else {
-            data->period_us = current_period_us;
-            data->period_buffer[data->buffer_index] = current_period_us;
+		if (data->data_sem != NULL) {
+			k_sem_give(data->data_sem);
+		}
+	} else {
+		data->consecutive_invalid++;
 
-            if (data->valid_periods < data->buffer_size) {
-                data->valid_periods++;
-            }
-        }
+		if (data->consecutive_invalid >= data->consecutive_invalid_threshold) {
+			k_mutex_lock(&data->mutex, K_FOREVER);
+			data->valid_periods = 0;
+			memset((void *)data->period_buffer, 0, sizeof(data->period_buffer));
+			k_mutex_unlock(&data->mutex);
 
-        data->buffer_index = (data->buffer_index + 1) % data->buffer_size;
-        k_mutex_unlock(&data->mutex);
+			data->state = YF_S201C_ERROR;
+			LOG_WRN("YF-S201C: Consecutive invalid periods, buffer reset");
+		}
+	}
 
-        data->last_valid_update_ms = k_uptime_get();
-        data->state = YF_S201C_RUNNING;
-
-        // Signal semaphore if configured for event-driven operation
-        if (data->data_sem != NULL) {
-            k_sem_give(data->data_sem);
-        }
-    } else {
-        // Invalid period
-        data->consecutive_invalid++;
-
-        if (data->consecutive_invalid >= data->consecutive_invalid_threshold) {
-            // Reset buffer
-            k_mutex_lock(&data->mutex, K_FOREVER);
-            data->valid_periods = 0;
-            memset((void *)data->period_buffer, 0, sizeof(data->period_buffer));
-            k_mutex_unlock(&data->mutex);
-
-            data->state = YF_S201C_ERROR;
-            LOG_WRN("YF-S201C: Consecutive invalid periods, buffer reset");
-        }
-    }
-
-    // Reset ISR flags
-    data->isr_valid_update = false;
-    data->isr_current_period_us = 0;
+	data->isr_valid_update = false;
+	data->isr_current_period_us = 0;
 }
 
 /* ============================================================================
@@ -231,60 +204,26 @@ int yf_s201c_set_data_semaphore(const struct device *dev, struct k_sem *sem)
 
 int yf_s201c_get_flow_rate(const struct device *dev, fixed_t *flow_rate)
 {
-    const struct yf_s201c_config *config = dev->config;
-    struct yf_s201c_data *data = dev->data;
-
-    if (data->state == YF_S201C_INIT) {
-        return -ENOTSUP;
-    }
-
-    // Thread-safe access
-    k_mutex_lock(&data->mutex, K_FOREVER);
-    int64_t current_period = data->period_us;
-    k_mutex_unlock(&data->mutex);
-
-    if (current_period > 0 && current_period <= INT32_MAX) {
-        // Overflow check
-        if (current_period * config->pulses_per_liter > INT64_MAX / 1000000) {
-            LOG_WRN("Flow rate calculation would overflow");
-            *flow_rate = 0;
-            return -ERANGE;
-        }
-        // Flow rate: (60 * 1e6) / (period_us * pulses_per_liter)
-        float flow_rate_lpm = (60.0f * 1000000.0f) / (current_period * config->pulses_per_liter);
-        *flow_rate = fixed_from_float(flow_rate_lpm);
-        return 0;
-    } else {
-        *flow_rate = 0;
-        return 0;
-    }
+	/* Deprecated during driver thinning.
+	 * Flow rate calculation now lives in FlowSensorService + flow_processor.
+	 * Kept for compatibility during the refactor.
+	 */
+	ARG_UNUSED(dev);
+	if (flow_rate) {
+		*flow_rate = 0;
+	}
+	LOG_WRN("yf_s201c_get_flow_rate is deprecated. Use yf_s201c_get_recent_periods_us() + flow_processor instead.");
+	return -ENOTSUP;
 }
 
 bool yf_s201c_is_data_valid(const struct device *dev)
 {
-    struct yf_s201c_data *data = dev->data;
-
-    if (data->state == YF_S201C_INIT || data->state == YF_S201C_ERROR) {
-        return false;
-    }
-
-    int64_t now = k_uptime_get();
-
-    // Check staleness
-    if (now - data->last_valid_update_ms > data->stale_threshold_ms) {
-        return false;
-    }
-
-    // Check consecutive invalid
-    if (data->consecutive_invalid >= data->consecutive_invalid_threshold) {
-        return false;
-    }
-
-    k_mutex_lock(&data->mutex, K_FOREVER);
-    bool has_valid = (data->valid_periods >= 1 && data->period_us > 0);
-    k_mutex_unlock(&data->mutex);
-
-    return has_valid;
+	/* Deprecated during driver thinning.
+	 * Validity policy now lives in FlowSensorService.
+	 */
+	ARG_UNUSED(dev);
+	LOG_WRN("yf_s201c_is_data_valid is deprecated. Validity logic moved to application layer.");
+	return false;
 }
 
 int yf_s201c_get_current_period(const struct device *dev, int64_t *period_us)
@@ -328,6 +267,31 @@ int yf_s201c_reset(const struct device *dev)
 
     LOG_INF("YF-S201C sensor reset complete");
     return 0;
+}
+
+/* New thin API function (introduced during driver refactoring) */
+int yf_s201c_get_recent_periods_us(const struct device *dev,
+				   int64_t *periods_us,
+				   size_t len)
+{
+	struct yf_s201c_data *data = dev->data;
+
+	if (!periods_us || len == 0) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&data->mutex, K_FOREVER);
+
+	size_t available = MIN(len, (size_t)data->valid_periods);
+	size_t start = (data->buffer_index + data->buffer_size - available) % data->buffer_size;
+
+	for (size_t i = 0; i < available; i++) {
+		periods_us[i] = data->period_buffer[(start + i) % data->buffer_size];
+	}
+
+	k_mutex_unlock(&data->mutex);
+
+	return (int)available;
 }
 
 /* ============================================================================

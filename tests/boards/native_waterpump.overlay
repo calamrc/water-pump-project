@@ -1,0 +1,44 @@
+/*
+ * Emulation overlay for native_sim / emulation tests.
+ *
+ * This overlay replaces the real GPIOs used by our custom drivers with
+ * gpio-emul instances so we can inject pulses and observe relay state
+ * in automated tests without any physical hardware.
+ */
+
+ / {
+	aliases {
+		flow-sensor-gpio = &gpio_emul;
+		pump-relay-gpio  = &gpio_emul;
+		feedback-relay-gpio = &gpio_emul;
+	};
+
+	chosen {
+		zephyr,gpio-emul = &gpio_emul;
+	};
+};
+
+&gpio0 {
+	status = "okay";
+
+	gpio_emul: gpio_emul {
+		compatible = "zephyr,gpio-emul";
+		ngpios = <64>;
+		#gpio-cells = <2>;
+		gpio-controller;
+		status = "okay";
+	};
+};
+
+/* Re-point our devices to use the emulated GPIO controller */
+&pump_controller {
+	relay-gpios = <&gpio_emul 19 GPIO_ACTIVE_LOW>;
+};
+
+&feedback_relay {
+	gpios = <&gpio_emul 13 GPIO_OPEN_DRAIN>;
+};
+
+&flow_sensor {
+	gpios = <&gpio_emul 18 GPIO_PULL_UP>;
+};

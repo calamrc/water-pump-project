@@ -1,0 +1,6 @@
+tests:
+  drivers.sensor.yf_s201c:
+    tags: drivers sensor yf_s201c
+    platform_allow: native_sim
+    extra_args: "OVERLAY_CONFIG=boards/native_yf_s201c.overlay"
+    harness: ztest

@@ -1,0 +1,22 @@
+/ {
+	chosen {
+		zephyr,gpio-emul = &gpio_emul;
+	};
+};
+
+&gpio0 {
+	status = "okay";
+
+	gpio_emul: gpio_emul {
+		compatible = "zephyr,gpio-emul";
+		ngpios = <32>;
+		#gpio-cells = <2>;
+		gpio-controller;
+		status = "okay";
+	};
+};
+
+/* Point the feedback relay to the emulated GPIO */
+&feedback_relay {
+	gpios = <&gpio_emul 13 GPIO_OPEN_DRAIN>;
+};

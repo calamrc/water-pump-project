@@ -1,0 +1,8 @@
+2026-05-27 20:26:32,661 - twister - INFO - Using Ninja..
+2026-05-27 20:26:32,750 - twister - INFO - Zephyr version: v4.4.0
+2026-05-27 20:26:32,760 - twister - DEBUG - Running cmake script /Users/rccalam/Workspace/Projects/zephyr-rtos/water-pump-project/zephyr/cmake/verify-toolchain.cmake
+2026-05-27 20:26:32,760 - twister - DEBUG - Calling cmake: /opt/homebrew/bin/cmake -DFORMAT=json -P /Users/rccalam/Workspace/Projects/zephyr-rtos/water-pump-project/zephyr/cmake/verify-toolchain.cmake
+2026-05-27 20:26:32,954 - twister - DEBUG - Finished running /Users/rccalam/Workspace/Projects/zephyr-rtos/water-pump-project/zephyr/cmake/verify-toolchain.cmake
+2026-05-27 20:26:32,954 - twister - INFO - Using 'zephyr/gnu' toolchain variant.
+2026-05-27 20:26:33,941 - twister - DEBUG - Reading testsuite configuration files under /Users/rccalam/Workspace/Projects/zephyr-rtos/water-pump-project/water-pump-project/app/tests/emulation/test_pump_flow_smoke...
+2026-05-27 20:26:33,941 - twister - ERROR - No testsuites found at the specified location...

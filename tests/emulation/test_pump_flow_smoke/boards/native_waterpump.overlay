@@ -1,0 +1,42 @@
+/*
+ * Portable emulation overlay for native_sim and qemu_x86.
+ *
+ * Defines gpio-emul + the three custom driver nodes so the plant-driven
+ * tests (and other emulation tests) can run on both Linux (native_sim)
+ * and macOS/Windows (qemu_x86).
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+
+	/* gpio_emul controller provided for all emulation targets */
+	gpio_emul: gpio_emul {
+		compatible = "zephyr,gpio-emul";
+		ngpios = <64>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "okay";
+	};
+
+	/* The three custom devices used by the water pump application */
+	pump_controller: pump_controller {
+		compatible = "aygu,pump-controller";
+		relay-gpios = <&gpio_emul 19 GPIO_ACTIVE_LOW>;
+		safety-timeout-min = <5>;
+		status = "okay";
+	};
+
+	feedback_relay: feedback_relay {
+		compatible = "aygu,feedback-relay";
+		gpios = <&gpio_emul 13 GPIO_OPEN_DRAIN>;
+		status = "okay";
+	};
+
+	flow_sensor: flow-sensor {
+		compatible = "aygu,yf-s201c";
+		gpios = <&gpio_emul 18 GPIO_PULL_UP>;
+		pulses-per-liter = <450>;
+		status = "okay";
+	};
+};

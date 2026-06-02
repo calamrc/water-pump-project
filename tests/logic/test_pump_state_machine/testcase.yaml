@@ -1,0 +1,10 @@
+tests:
+  logic.pump_state_machine:
+    tags: pump logic zbus
+    platform_allow:
+      - qemu_x86
+      - native_sim
+    harness: ztest
+    # Note: native_sim is preferred but does not work on macOS.
+    # Use qemu_x86 on macOS (requires x86_64-zephyr-elf toolchain from Zephyr SDK).
+

@@ -1,0 +1,5 @@
+tests:
+  timer_state_machine_unit_tests:
+    tags: timer logic
+    platform_allow: native_sim qemu_x86
+    harness: ztest

@@ -1,0 +1,6 @@
+tests:
+  feedback_relay_driver_emulation:
+    tags: drivers feedback_relay
+    platform_allow: native_sim
+    extra_args: "OVERLAY_CONFIG=boards/native_feedback_relay.overlay"
+    harness: ztest

@@ -1,0 +1,18 @@
+tests:
+  emulation.pump_flow_smoke:
+    tags: emulation zbus pump plant-model
+    # native_sim is Linux-only (POSIX arch). On macOS/Windows use qemu_x86.
+    platform_allow:
+      - native_sim
+      - qemu_x86
+      - qemu_x86_64
+    # The local boards/ copy + DTC_OVERLAY_FILE makes the relative path work
+    # when twister builds the test from inside its own directory.
+    extra_args: "DTC_OVERLAY_FILE=boards/native_waterpump.overlay"
+    harness: ztest
+    # To exercise the plant-data path (option B): generate the header first, then:
+    #   west twister -T tests/emulation/test_pump_flow_smoke --platform qemu_x86 --inline-logs
+    #
+    # On Linux you can also use native_sim for faster execution.
+    # The new test_plant_model_driven_flow_path will be compiled in only when
+    # generated_plant_data.h is present next to the test source.

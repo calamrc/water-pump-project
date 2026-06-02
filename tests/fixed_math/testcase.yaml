@@ -1,0 +1,7 @@
+tests:
+  fixed.math:
+    tags: fixed math
+    platform_allow:
+      - qemu_x86
+      - native_sim
+    harness: ztest
