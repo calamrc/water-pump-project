@@ -39,10 +39,7 @@ static enum pump_sm_state current_sm_state = PUMP_SM_STATE_OFF;
  * different threads from pubs). Best-effort K_NO_WAIT + zbus serialization
  * assumed (consistent with safety_service etc). Documented per review Issue 6;
  * add k_mutex if races observed in PR2+.
- * Per review, added K_MUTEX + guards around mutations in handle/on_event/on_cmd
- * (and wd path) for serialized access.
  */
-static K_MUTEX_DEFINE(pump_sm_lock);
 static bool pump_device_ready = false;
 static const struct device *pump_dev;
 static int64_t pump_run_start_time = 0; /* when we last entered RUNNING */
@@ -99,14 +96,16 @@ static void on_flow_sample(const struct zbus_channel *chan) {
 
 /* Demand handler: builds pure input (flow + mapped timer snapshot), runs
  * evaluate, processes SM event, drives hardware. Called from both flow and
- * timer listeners (using caches for the other).
+ * timer listeners (using caches for the other). With the keeper PLATEAU
+ * for active no-force cases, re-eval on every timer pub (incl. 1s hb) is
+ * safe and does not force off (only complete timer does via SAFETY).
  */
+
 static void pump_handle_demand(const struct flow_sample *flow,
                                const struct timer_pure_status *timer) {
   struct pump_demand_input in = {.flow = flow, .timer = timer};
   struct pump_demand_result res;
 
-  k_mutex_lock(&pump_sm_lock, K_FOREVER);
   pump_demand_evaluate(&in, current_sm_state, &res);
 
   enum pump_sm_state next =
@@ -119,31 +118,36 @@ static void pump_handle_demand(const struct flow_sample *flow,
 
     current_sm_state = next;
 
-    /* Drive the real hardware */
-    if (pump_sm_is_active(next) && !pump_controller_is_on(pump_dev)) {
-      int64_t use_period = (res.updated_plateau_period_us > 0)
-                               ? res.updated_plateau_period_us
-                               : 0;
-      (void)pump_controller_turn_on(pump_dev, use_period);
-      pump_run_start_time = k_uptime_get();
-      LOG_INF("[PUMP] Driver turned ON");
-    } else if (!pump_sm_is_active(next) && pump_controller_is_on(pump_dev)) {
-      (void)pump_controller_turn_off(pump_dev);
-      pump_run_start_time = 0;
-      LOG_INF("[PUMP] Driver turned OFF");
+    /* Drive the real hardware (only if ready; sm_state is updated regardless
+     * for consistency with demand decisions).
+     */
+    if (pump_device_ready && pump_dev) {
+      if (pump_sm_is_active(next) && !pump_controller_is_on(pump_dev)) {
+        int64_t use_period = (res.updated_plateau_period_us > 0)
+                                 ? res.updated_plateau_period_us
+                                 : 0;
+        (void)pump_controller_turn_on(pump_dev, use_period);
+        pump_run_start_time = k_uptime_get();
+        LOG_INF("[PUMP] Driver turned ON");
+      } else if (!pump_sm_is_active(next) && pump_controller_is_on(pump_dev)) {
+        (void)pump_controller_turn_off(pump_dev);
+        pump_run_start_time = 0;
+        LOG_INF("[PUMP] Driver turned OFF");
+      }
     }
   }
 
-  /* Always consider period update for running (Phase B good periods for 1.5x,
-   * or after initial turn-on). Moved out of transition if() so refresh works
-   * on no-sm-change path too (using PLATEAU_DETECTED as harmless keep event
-   * from demand). */
+  /* Period refresh for 1.5x watchdog while RUNNING. Hoisted outside the
+   * (next != current) block so it applies on "keeper" evals (PLATEAU from
+   * active no-force cases, including timer heartbeats and flow samples
+   * while running) that cause no state change. (turn_on path passes period
+   * directly at on-transition.)
+   */
   if (current_sm_state == PUMP_SM_STATE_RUNNING &&
-      res.updated_plateau_period_us > 0) {
+      res.updated_plateau_period_us > 0 && pump_device_ready && pump_dev) {
     pump_controller_update_plateau_period(pump_dev,
                                           res.updated_plateau_period_us);
   }
-  k_mutex_unlock(&pump_sm_lock);
 
   publish_pump_status_if_changed(false);
 }
@@ -167,23 +171,10 @@ static void on_flow_event(const struct zbus_channel *chan) {
     return;
   }
   if (ev.type == FLOW_EVENT_WATCHDOG_TIMEOUT) {
-    /* Handle watchdog timeout from FlowSensorService (contract gap via 1.5x k_work).
-     * Drive SM + driver off (before any valid gate). Separate from flow_sample data path. */
-    LOG_INF("[PUMP] received FLOW_EVENT_WATCHDOG_TIMEOUT (gap detected by flow contract)");
-    k_mutex_lock(&pump_sm_lock, K_FOREVER);
-    if (pump_sm_is_active(current_sm_state)) {
-      /* Use RESET (not TIMEOUT) for wd gap to land in OFF (simpler recovery on new flow;
-       * matches host_sim direct OFF, explicit OFF/RESET paths, and allows immediate
-       * PLATEAU_DETECTED -> STARTING on next plateau without extra RESET cmd).
-       * Service SM and driver both end in OFF state. */
-      current_sm_state =
-          pump_sm_process_event(current_sm_state, PUMP_SM_EVENT_RESET);
-      (void)pump_controller_turn_off(pump_dev);
-      pump_run_start_time = 0;
-      LOG_INF("[PUMP] turned OFF due to FLOW_EVENT_WATCHDOG_TIMEOUT");
-    }
-    k_mutex_unlock(&pump_sm_lock);
-    publish_pump_status_if_changed(true);
+    /* Stub: log for observability in PR1. Real action (timeout event to SM)
+     * deferred. */
+    LOG_INF(
+        "[PUMP] received FLOW_EVENT_WATCHDOG_TIMEOUT (action in follow-up)");
   }
 }
 
@@ -205,11 +196,15 @@ static void on_timer_state(const struct zbus_channel *chan) {
     return;
   }
 
-  cached_timer.completed = (ts.state == TIMER_STATE_COMPLETED);
-  cached_timer.remaining_sec = ts.remaining_sec;
+  cached_timer = (struct timer_pure_status){
+      .completed = (ts.state == TIMER_STATE_COMPLETED),
+      .remaining_sec = ts.remaining_sec,
+  };
 
   /* Re-eval on timer pub (periodic or state change). Use cached flow for
    * context (plateau/period) or allow NULL flow for timer-only force-off.
+   * Safe for heartbeats because demand emits keeper (PLATEAU) for active
+   * states when no timer complete.
    */
   if (cached_flow.valid) {
     pump_handle_demand(&cached_flow, &cached_timer);
@@ -224,12 +219,15 @@ ZBUS_LISTENER_DEFINE(pump_timer_listener, on_timer_state);
 static void on_pump_cmd(const struct zbus_channel *chan) {
   ARG_UNUSED(chan);
 
+  if (!pump_device_ready || !pump_dev) {
+    return;
+  }
+
   struct pump_cmd cmd;
   if (zbus_chan_read(&pump_cmd_chan, &cmd, K_NO_WAIT) != 0) {
     return;
   }
 
-  k_mutex_lock(&pump_sm_lock, K_FOREVER);
   switch (cmd.action) {
   case PUMP_CMD_OFF:
     current_sm_state =
@@ -260,7 +258,6 @@ static void on_pump_cmd(const struct zbus_channel *chan) {
   default:
     break;
   }
-  k_mutex_unlock(&pump_sm_lock);
 
   publish_pump_status_if_changed(true);
 }

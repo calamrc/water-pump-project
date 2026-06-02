@@ -35,12 +35,24 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
     result->should_force_off = true;
     result->primary_reason = PUMP_DEMAND_REASON_TIMER_COMPLETE;
     result->reason_str = "timer completed while pump active -> safety off";
-    /* continue so we can still propagate period if flow present */
+    /* do not return early; fall through to capture period if valid flow is
+     * present (period ends up in result for diagnostics/future; the off path
+     * will not trigger driver period-refresh since we land !RUNNING).
+     */
   }
 
   if (!input || !input->flow || !input->flow->valid) {
-    if (result->primary_reason != PUMP_DEMAND_REASON_TIMER_COMPLETE) {
-      result->reason_str = "no valid flow data";
+    if (!result->should_force_off) {
+      if (pump_already_active) {
+        /* Keeper: emit PLATEAU_DETECTED so handle sees next==current for
+         * active states (prevents default RESET which would turn off).
+         * No hardware action since no state change.
+         */
+        result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
+        result->reason_str = "no valid flow data but pump active (keeper; no state change)";
+      } else {
+        result->reason_str = "no valid flow data";
+      }
     }
     return;
   }
@@ -57,11 +69,11 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
 
   result->significant_flow_detected = confirmed_plateau;
 
-  /* Always propagate latest period (for 1.5x watchdog) when pump active,
-   * regardless of whether this sample carries a new plateau. (Previously
-   * only inside the plateau+active branch.)
+  /* Propagate period from every valid sample: used both for the initial
+   * turn_on (on the !active + plateau auto-on gate) and for 1.5x watchdog
+   * refresh while active. (No active-guard; harmless when unused.)
    */
-  if (pump_already_active && input->flow->period_us > 0) {
+  if (input->flow->period_us > 0) {
     result->updated_plateau_period_us = input->flow->period_us;
   }
 
@@ -69,9 +81,8 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
     if (!pump_already_active) {
       /* Phase A (pump off or not yet stably running): a confirmed
        * plateau is a valid demand to turn the pump on.
-       * (Do not override if timer already forced off, though !active case.)
        */
-      if (result->recommended_event != PUMP_SM_EVENT_SAFETY_TIMEOUT) {
+      if (!result->should_force_off) {
         result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
         result->primary_reason = PUMP_DEMAND_REASON_SIGNIFICANT_FLOW;
         result->reason_str =
@@ -81,19 +92,31 @@ void pump_demand_evaluate(const struct pump_demand_input *input,
       /* Phase B (pump already running): this plateau (if any) is only
        * useful for harvesting the latest good pulse period for the
        * 1.5x watchdog timer. It is deliberately *not* treated as a
-       * demand / re-plateau event.
+       * demand / re-plateau event. (Keeper PLATEAU will be set below
+       * for state preservation on no-change evals.)
        */
-      if (result->primary_reason != PUMP_DEMAND_REASON_TIMER_COMPLETE) {
+      if (!result->should_force_off) {
         result->primary_reason = PUMP_DEMAND_REASON_NONE;
         result->reason_str =
             "pump running - plateau only for watchdog period refresh (no demand)";
       }
-      /* period already propagated above for all active cases */
     }
   } else {
-    if (result->primary_reason != PUMP_DEMAND_REASON_TIMER_COMPLETE) {
+    if (!result->should_force_off) {
       result->primary_reason = PUMP_DEMAND_REASON_NONE;
       result->reason_str = "no confirmed plateau from analyzer";
     }
+  }
+
+  /* If we still have the conservative RESET (no positive on-demand and no
+   * force-off like timer complete) *and* the pump is active, emit
+   * PLATEAU_DETECTED as a no-op "keeper". SM treats PLATEAU on RUNNING as
+   * no state change (stays RUNNING); on STARTING it advances to RUNNING.
+   * This prevents timer heartbeats / running flow samples from defaulting
+   * to RESET (which transitions active -> OFF per table). Flow plateau is
+   * still sole gate for *auto-on from !active*. Timer force takes precedence.
+   */
+  if (result->recommended_event == PUMP_SM_EVENT_RESET && pump_already_active) {
+    result->recommended_event = PUMP_SM_EVENT_PLATEAU_DETECTED;
   }
 }

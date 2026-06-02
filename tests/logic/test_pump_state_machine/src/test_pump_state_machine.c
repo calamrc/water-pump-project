@@ -174,6 +174,11 @@ ZTEST(pump_state_machine_tests, test_demand_timer_complete_with_no_valid_flow_st
 	zassert_true(res.should_force_off, "force off");
 	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_TIMER_COMPLETE,
 		      "reason timer");
+	/* Verify resulting SM state (STARTING + SAFETY -> ERROR per table) */
+	enum pump_sm_state next =
+		pump_sm_process_event(PUMP_SM_STATE_STARTING, res.recommended_event);
+	zassert_equal(next, PUMP_SM_STATE_ERROR,
+		      "STARTING + SAFETY_TIMEOUT (timer) -> ERROR");
 }
 
 ZTEST(pump_state_machine_tests, test_demand_always_propagates_period_while_active)
@@ -189,8 +194,12 @@ ZTEST(pump_state_machine_tests, test_demand_always_propagates_period_while_activ
 	pump_demand_evaluate(&in, PUMP_SM_STATE_RUNNING, &res);
 	zassert_equal(res.updated_plateau_period_us, 54321,
 		      "period always propagated for 1.5x watchdog while active");
-	zassert_equal(res.recommended_event, PUMP_SM_EVENT_RESET,
-		      "non-plateau while running emits no on event");
+	/* Emits PLATEAU_DETECTED as keeper (SM no-op on RUNNING so no state
+	 * change or hardware action in handle; allows period refresh outside
+	 * next!=current). Not a "demand" (reason indicates).
+	 */
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_PLATEAU_DETECTED,
+		      "non-plateau while running emits keeper (no on)");
 	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_NONE, "none");
 }
 
@@ -205,8 +214,13 @@ ZTEST(pump_state_machine_tests, test_demand_plateau_while_running_only_for_perio
 	struct pump_demand_result res;
 	pump_demand_evaluate(&in, PUMP_SM_STATE_RUNNING, &res);
 	zassert_equal(res.updated_plateau_period_us, 22222, "period updated");
-	zassert_not_equal(res.recommended_event, PUMP_SM_EVENT_PLATEAU_DETECTED,
-			  "plateau while running must not re-trigger on");
+	/* Emits PLATEAU as keeper for active (harmless in SM; reason shows
+	 * this is for period refresh only, not a demand re-trigger).
+	 */
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_PLATEAU_DETECTED,
+		      "plateau while running emits keeper PLATEAU");
+	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_NONE,
+		      "reason indicates only for period, no demand");
 }
 
 ZTEST_SUITE(pump_state_machine_tests, NULL, NULL, NULL, NULL, NULL);
