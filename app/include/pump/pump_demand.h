@@ -40,8 +40,9 @@ enum pump_demand_reason {
 
 /**
  * @brief Input snapshot for the demand policy evaluator.
- * Timer uses pure type (NULLable). Watchdog events come via flow_event_chan
- * listener (not in flow).
+ * Timer uses pure type (NULLable). Timer complete only ever force-off when
+ * active (flow plateau sole auto-on gate). Watchdog events come via
+ * flow_event_chan listener (not in flow).
  */
 struct pump_demand_input {
   const struct flow_sample *flow; /* may be NULL */

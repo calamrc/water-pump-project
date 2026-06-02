@@ -6,8 +6,8 @@
  *
  * Owns the pump_controller driver.
  * Subscribes to flow_sample_chan, pump_cmd_chan, flow_event_chan (for watchdog
- * etc). Timer is intentionally decoupled (independent feature; uses pure
- * timer_pure_status).
+ * etc), and timer_state_chan (maps timer_status to pure timer_pure_status for
+ * demand; timer complete only ever forces off when active).
  */
 
 #include <app/drivers/pump_controller.h>
@@ -22,7 +22,14 @@
 #include "zbus/channels.h"
 
 /* Forward declaration */
-static void pump_handle_flow_demand(const struct flow_sample *flow);
+static void pump_handle_demand(const struct flow_sample *flow,
+                               const struct timer_pure_status *timer);
+
+/* Cached snapshots for cross-trigger re-evaluation (flow updates + timer pubs).
+ * Allows timer_state_chan to drive demand using last known flow, and vice-versa.
+ */
+static struct flow_sample cached_flow;
+static struct timer_pure_status cached_timer;
 
 LOG_MODULE_REGISTER(pump_service, CONFIG_APP_LOG_LEVEL);
 
@@ -86,12 +93,17 @@ static void on_flow_sample(const struct zbus_channel *chan) {
     return;
   }
 
-  pump_handle_flow_demand(&sample);
+  cached_flow = sample;
+  pump_handle_demand(&cached_flow, &cached_timer);
 }
 
-/* Pure flow-driven demand logic (Timer is intentionally decoupled) */
-static void pump_handle_flow_demand(const struct flow_sample *flow) {
-  struct pump_demand_input in = {.flow = flow, .timer = NULL};
+/* Demand handler: builds pure input (flow + mapped timer snapshot), runs
+ * evaluate, processes SM event, drives hardware. Called from both flow and
+ * timer listeners (using caches for the other).
+ */
+static void pump_handle_demand(const struct flow_sample *flow,
+                               const struct timer_pure_status *timer) {
+  struct pump_demand_input in = {.flow = flow, .timer = timer};
   struct pump_demand_result res;
 
   k_mutex_lock(&pump_sm_lock, K_FOREVER);
@@ -177,6 +189,37 @@ static void on_flow_event(const struct zbus_channel *chan) {
 
 ZBUS_LISTENER_DEFINE(pump_flow_event_listener, on_flow_event);
 
+/* Listener for timer_state_chan. Maps zbus timer_status to pure
+ * timer_pure_status and re-evals demand (using cached flow if available,
+ * or NULL flow for pure timer-off path). Timer complete only turns off
+ * (if active); never on.
+ */
+static void on_timer_state(const struct zbus_channel *chan) {
+  ARG_UNUSED(chan);
+  if (!pump_device_ready) {
+    return;
+  }
+
+  struct timer_status ts;
+  if (zbus_chan_read(&timer_state_chan, &ts, K_NO_WAIT) != 0) {
+    return;
+  }
+
+  cached_timer.completed = (ts.state == TIMER_STATE_COMPLETED);
+  cached_timer.remaining_sec = ts.remaining_sec;
+
+  /* Re-eval on timer pub (periodic or state change). Use cached flow for
+   * context (plateau/period) or allow NULL flow for timer-only force-off.
+   */
+  if (cached_flow.valid) {
+    pump_handle_demand(&cached_flow, &cached_timer);
+  } else {
+    pump_handle_demand(NULL, &cached_timer);
+  }
+}
+
+ZBUS_LISTENER_DEFINE(pump_timer_listener, on_timer_state);
+
 /* Listener for external pump commands (from UI, Safety, etc.) */
 static void on_pump_cmd(const struct zbus_channel *chan) {
   ARG_UNUSED(chan);
@@ -258,6 +301,12 @@ static void pump_thread(void *a1, void *a2, void *a3) {
       zbus_chan_add_obs(&flow_event_chan, &pump_flow_event_listener, K_NO_WAIT);
   if (ret < 0 && ret != -EALREADY) {
     LOG_WRN("Failed to attach flow_event listener (%d)", ret);
+  }
+
+  ret =
+      zbus_chan_add_obs(&timer_state_chan, &pump_timer_listener, K_NO_WAIT);
+  if (ret < 0 && ret != -EALREADY) {
+    LOG_WRN("Failed to attach timer listener (%d)", ret);
   }
 
   /* Initial status */

@@ -10,8 +10,9 @@ zephyr_include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../app/include
 )
 
-# Pull in the pure state machine implementation + the test
+# Pull in the pure state machine + demand policy impl (for timer/period tests) + test
 target_sources(app PRIVATE
   src/test_pump_state_machine.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../app/src/pump_state_machine.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../app/src/pump/pump_demand.c
 )

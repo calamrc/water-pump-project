@@ -51,7 +51,7 @@ static void timer_thread(void *arg1, void *arg2, void *arg3)
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
-	LOG_INF("TimerService started — publishing on timer_state_chan");
+	LOG_INF("TimerService started — publishing on timer_state_chan (consumed by PumpService for timer_pure_status -> demand force-off on COMPLETE)");
 
 	/* Initial state */
 	publish_timer_state();

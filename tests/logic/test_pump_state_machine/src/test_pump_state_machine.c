@@ -9,6 +9,9 @@
 
 #include <zephyr/ztest.h>
 #include "pump_state_machine.h"
+#include "pump/pump_demand.h" /* pure demand policy tests (timer complete, period, etc) */
+#include "pump/pump_data_types.h" /* for timer_pure_status in tests */
+#include "fixed_math.h" /* for fixed_from_float in test inputs */
 
 ZTEST(pump_state_machine_tests, test_initial_state)
 {
@@ -96,6 +99,114 @@ ZTEST(pump_state_machine_tests, test_flow_drop_stops_pump)
 	enum pump_sm_state s = PUMP_SM_STATE_RUNNING;
 	s = pump_sm_process_event(s, PUMP_SM_EVENT_RESET);
 	zassert_equal(s, PUMP_SM_STATE_OFF, "Flow drop should stop pump");
+}
+
+/* --------------------------------------------------------------------------
+ * Pure demand policy tests (pump_demand_evaluate). Exercises the timer
+ * complete -> force off path (PR3), always-propagate period, watchdog-ish
+ * (timer before valid flow gate), and confirms plateau sole on-gate (no
+ * timer turn-on).
+ * -------------------------------------------------------------------------- */
+
+ZTEST(pump_state_machine_tests, test_demand_plateau_on_when_off)
+{
+	struct flow_sample f = {
+		.rate = fixed_from_float(1.5f),
+		.valid = true,
+		.plateau_detected = true,
+		.period_us = 12345,
+	};
+	struct pump_demand_input in = {.flow = &f, .timer = NULL};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_OFF, &res);
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_PLATEAU_DETECTED,
+		      "plateau should recommend on from off");
+	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_SIGNIFICANT_FLOW,
+		      "significant flow reason");
+	zassert_false(res.should_force_off, "flow on not force-off");
+	zassert_true(res.updated_plateau_period_us == 0 ||
+		     res.updated_plateau_period_us == 12345,
+		     "period may be set");
+}
+
+ZTEST(pump_state_machine_tests, test_demand_timer_complete_forces_off_when_active)
+{
+	struct flow_sample f = {
+		.valid = true,
+		.plateau_detected = false,
+		.period_us = 10000,
+	};
+	struct timer_pure_status t = {.completed = true, .remaining_sec = 0};
+	struct pump_demand_input in = {.flow = &f, .timer = &t};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_RUNNING, &res);
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_SAFETY_TIMEOUT,
+		      "timer complete + active -> SAFETY_TIMEOUT");
+	zassert_true(res.should_force_off, "should force off");
+	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_TIMER_COMPLETE,
+		      "timer complete reason");
+	zassert_str_equal(res.reason_str,
+			  "timer completed while pump active -> safety off",
+			  "reason str");
+}
+
+ZTEST(pump_state_machine_tests, test_demand_timer_complete_no_turn_on)
+{
+	struct timer_pure_status t = {.completed = true, .remaining_sec = 0};
+	struct pump_demand_input in = {.flow = NULL, .timer = &t};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_OFF, &res);
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_RESET,
+		      "timer complete must not turn on (default reset)");
+	zassert_false(res.should_force_off,
+		      "not active so no force off either");
+}
+
+ZTEST(pump_state_machine_tests, test_demand_timer_complete_with_no_valid_flow_still_offs)
+{
+	/* exercises "watchdog gate before valid" for timer path */
+	struct timer_pure_status t = {.completed = true, .remaining_sec = 5};
+	struct pump_demand_input in = {.flow = NULL, .timer = &t};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_STARTING, &res);
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_SAFETY_TIMEOUT,
+		      "timer offs even without valid flow when active");
+	zassert_true(res.should_force_off, "force off");
+	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_TIMER_COMPLETE,
+		      "reason timer");
+}
+
+ZTEST(pump_state_machine_tests, test_demand_always_propagates_period_while_active)
+{
+	/* period for watchdog even on non-plateau sample (while running) */
+	struct flow_sample f = {
+		.valid = true,
+		.plateau_detected = false, /* no new demand */
+		.period_us = 54321,
+	};
+	struct pump_demand_input in = {.flow = &f, .timer = NULL};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_RUNNING, &res);
+	zassert_equal(res.updated_plateau_period_us, 54321,
+		      "period always propagated for 1.5x watchdog while active");
+	zassert_equal(res.recommended_event, PUMP_SM_EVENT_RESET,
+		      "non-plateau while running emits no on event");
+	zassert_equal(res.primary_reason, PUMP_DEMAND_REASON_NONE, "none");
+}
+
+ZTEST(pump_state_machine_tests, test_demand_plateau_while_running_only_for_period)
+{
+	struct flow_sample f = {
+		.valid = true,
+		.plateau_detected = true,
+		.period_us = 22222,
+	};
+	struct pump_demand_input in = {.flow = &f, .timer = NULL};
+	struct pump_demand_result res;
+	pump_demand_evaluate(&in, PUMP_SM_STATE_RUNNING, &res);
+	zassert_equal(res.updated_plateau_period_us, 22222, "period updated");
+	zassert_not_equal(res.recommended_event, PUMP_SM_EVENT_PLATEAU_DETECTED,
+			  "plateau while running must not re-trigger on");
 }
 
 ZTEST_SUITE(pump_state_machine_tests, NULL, NULL, NULL, NULL, NULL);
