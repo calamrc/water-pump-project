@@ -252,7 +252,12 @@ ZTEST(pump_flow_smoke, test_real_driver_flow_processor_zbus_path) {
   /* The critical assertion for flow-sensor completion */
   zassert_true(got_flow_sample, "flow_sample_chan must have received a "
                                 "publication from the driver+processor path");
-  zassert_true(last_flow.valid || true,
+  /* Real assert (not tautological): the synthetic "real-path" sample we just
+   * constructed+pub'd (valid=true) must have been observed by listener and
+   * have .valid preserved. (Backward-compat note refers to the manual
+   * construction mirroring real service pubs; the rate band below provides
+   * additional validation.) */
+  zassert_true(last_flow.valid,
                "Sample should be considered valid for a clean pulse train");
   float observed = fixed_to_float(last_flow.rate);
   zassert_true(observed > 10.0f && observed < 16.0f,
@@ -324,10 +329,17 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
   drive_plant_pulse_sequence(gpio_dev, FLOW_GPIO_PIN, plant_pulse_periods_us,
                              plant_pulse_periods_us_count);
 
-  /* Allow driver workq + flow thread (sem) + pump listeners + final 1.5x wd
-   * timers (k_work) to fire contract gap checks + event pubs + SM off at end of
-   * 20s trace (hard close gaps). Use longer sleep to cover 1.5x of last good
-   * plateau periods in trace. */
+  /* Bounded wait helper (addresses Issue 5 timing fragility): poll for core
+   * Phase A results (saw_pump_on + period>0 from demand/turn_on/status) up to
+   * ~1s. Services are async (zbus, k_work wd, sem, threads). This makes test
+   * less dependent on exact fixed sleeps + FAST busy_waits. */
+  for (int w = 0; w < 20 && !(saw_pump_on && captured_plateau_period_us > 0);
+       ++w) {
+    k_sleep(K_MSEC(50));
+  }
+
+  /* Allow ... final wd etc. (longer fixed for 1.5x of last plateau in trace).
+   */
   k_sleep(K_MSEC(400));
 
   /* PR4 20s asserts (I-want-B full fidelity): on pump_status is_on (toggles at
@@ -342,7 +354,9 @@ ZTEST(pump_flow_smoke, test_plant_model_driven_flow_path) {
                "should have captured >0 plateau period_us (for Phase A handoff "
                "to turn_on)");
   /* wd may or may not have fired depending on exact last gaps vs sleep + fast
-   * mode (one-shot timing in emul); core Phase A handoff + period>0 covered. */
+   * mode (one-shot timing in emul); bounded wait above + 400ms help robustness.
+   * Core Phase A handoff + period>0 covered. For non-FAST full 20s fidelity one
+   * could assert got_flow_event_watchdog unconditionally. */
   if (!got_flow_event_watchdog) {
     /* optional in fast mode; do not assert failure */
     printk("note: no FLOW_EVENT_WATCHDOG_TIMEOUT observed in this run (timing "

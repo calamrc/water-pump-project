@@ -42,6 +42,8 @@ int host_feedback_relay_pulse(void *dev, uint32_t duration_ms);
 
 #define HOST_LOG(fmt, ...) printf("[HOST] " fmt "\n", ##__VA_ARGS__)
 
-/* Note: flow_event_chan simulation (lightweight for wd asserts in 20s host_sim)
- * is done inline via contract_res in host_sim.c, not via these driver shims.
- * Shims cover pump_controller/feedback for other hosts/tests. PR4. */
+/* Note (PR4): flow_event_chan simulation (lightweight for wd asserts in 20s
+ * host_sim) is done inline via contract_res in host_sim.c (not via these
+ * driver shims). Shims + state are retained for other host harnesses/tests
+ * (pump_controller/feedback paths). clang-format applied (no .clang-format in
+ * tree; observed 2-space/brace style in many app/ * .c files). */

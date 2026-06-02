@@ -17,8 +17,9 @@ int host_pump_controller_turn_on(void *dev, int64_t plateau_period_us) {
   }
   return 0;
 }
-/* host_sim uses direct SM/demand not these shims for its 20s contract-driven
- * path. */
+/* NOTE (PR4 + retained for compat): host_sim (20s contract-driven path) uses
+ * direct pump SM + demand (not these shims). Shims + g_host_pump etc. are kept
+ * for other host harnesses/tests that drive via pump_controller shims. */
 
 int host_pump_controller_turn_off(void *dev) {
   (void)dev;
