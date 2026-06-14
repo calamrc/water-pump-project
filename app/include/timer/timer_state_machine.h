@@ -4,6 +4,7 @@
  *
  * Manages the countdown timer state and transitions.
  * Handles time setting, countdown, pause, and completion states.
+ * Publishes state changes via Zbus.
  */
 
 #ifndef TIMER_STATE_MACHINE_H_
@@ -18,24 +19,43 @@ extern "C" {
 
 /* Timer state machine states */
 enum timer_state {
-    TIMER_STATE_SETTING = 0,   /* Setting timer duration */
-    TIMER_STATE_RUNNING,       /* Counting down */
-    TIMER_STATE_PAUSED,        /* Paused */
-    TIMER_STATE_COMPLETED,     /* Timer finished */
+	TIMER_STATE_SETTING = 0,
+	TIMER_STATE_RUNNING,
+	TIMER_STATE_PAUSED,
+	TIMER_STATE_COMPLETED,
 };
 
 /* Timer configuration */
-#define TIMER_MIN_SECONDS   10   /* Minimum timer duration: 10 seconds */
-#define TIMER_MAX_SECONDS   3600 /* Maximum timer duration: 60 minutes */
-#define TIMER_DEFAULT_SECONDS 60 /* Default timer duration: 1 minute */
-#define TIMER_STEP_SECONDS  10   /* Encoder step: 10 seconds */
+#define TIMER_MIN_SECONDS   10
+#define TIMER_MAX_SECONDS   3600
+#define TIMER_DEFAULT_SECONDS 60
+#define TIMER_STEP_SECONDS  10
 
 /**
  * @brief Initialize the timer state machine
  *
- * Sets initial state to SETTING with default duration
+ * Sets initial state to SETTING with default duration.
+ * Also initializes the Zbus publishing channel and 1-second tick timer.
  */
 void timer_sm_init(void);
+
+/**
+ * @brief Start the 1-second tick timer
+ *
+ * Starts the periodic k_timer that drives countdown.
+ * Called automatically by timer_sm_start(), but can be called
+ * independently for testing.
+ */
+void timer_sm_start_tick(void);
+
+/**
+ * @brief Stop the 1-second tick timer
+ *
+ * Stops the periodic k_timer.
+ * Called automatically by timer_sm_pause()/timer_sm_reset(),
+ * but can be called independently.
+ */
+void timer_sm_stop_tick(void);
 
 /**
  * @brief Get the current timer state
@@ -69,7 +89,7 @@ void timer_sm_adjust_time(int32_t delta_seconds);
 /**
  * @brief Start the timer
  *
- * Transitions from SETTING or PAUSED to RUNNING
+ * Transitions from SETTING to RUNNING and starts the 1-second tick.
  *
  * @return 0 on success, negative errno if cannot start
  */
@@ -78,7 +98,7 @@ int timer_sm_start(void);
 /**
  * @brief Pause the timer
  *
- * Transitions from RUNNING to PAUSED
+ * Transitions from RUNNING to PAUSED and stops the tick.
  *
  * @return 0 on success, negative errno if cannot pause
  */
@@ -87,7 +107,7 @@ int timer_sm_pause(void);
 /**
  * @brief Resume the timer
  *
- * Transitions from PAUSED to RUNNING
+ * Transitions from PAUSED to RUNNING and restarts the tick.
  *
  * @return 0 on success, negative errno if cannot resume
  */
@@ -96,12 +116,12 @@ int timer_sm_resume(void);
 /**
  * @brief Stop and reset the timer
  *
- * Transitions to SETTING state with default duration
+ * Transitions to SETTING state with default duration and stops the tick.
  */
 void timer_sm_reset(void);
 
 /**
- * @brief Update the timer (called periodically, typically every second)
+ * @brief Update the timer (called internally by k_timer tick)
  *
  * Decrements remaining time when in RUNNING state.
  * Automatically transitions to COMPLETED when time reaches 0.

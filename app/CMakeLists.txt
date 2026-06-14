@@ -12,6 +12,7 @@ target_include_directories(app PRIVATE
   include/display
   include/input
   include/timer
+  include/zbus
 )
 
 target_sources(app PRIVATE
@@ -23,4 +24,5 @@ target_sources(app PRIVATE
   src/display/display_manager.c
   src/input/input_manager.c
   src/timer/timer_state_machine.c
+  src/zbus/channels.c
 )

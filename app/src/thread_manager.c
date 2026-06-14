@@ -33,12 +33,6 @@ static int thread_health_count = 0;
 /* Message Queue Definition */
 K_MSGQ_DEFINE(sensor_data_msgq, sizeof(struct sensor_data_msg), CONFIG_APP_SENSOR_MSGQ_SIZE, 4);
 
-/* Semaphore Definition */
-K_SEM_DEFINE(pump_event_sem, 0, 10);
-
-/* Poll Signal Definition */
-static struct k_poll_signal thread_health_signal;
-
 /* Shutdown coordination */
 static bool system_shutdown_requested = false;
 static struct k_sem shutdown_sem;
@@ -197,9 +191,6 @@ static int thread_health_check_all(void)
 int thread_manager_create_all_threads(void)
 {
     LOG_INF("Creating application threads...");
-
-    /* Initialize thread communication primitives */
-    k_poll_signal_init(&thread_health_signal);
 
     /* Initialize shutdown semaphore */
     k_sem_init(&shutdown_sem, 0, 1);
