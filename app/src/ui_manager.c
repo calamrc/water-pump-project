@@ -12,6 +12,7 @@
 #include "timer/timer_state_machine.h"
 #include "thread_comm.h"
 #include "zbus/messages.h"
+#include "fixed_math.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -22,6 +23,7 @@ LOG_MODULE_REGISTER(ui_manager, CONFIG_APP_LOG_LEVEL);
 
 #define FLASH_INTERVAL_MS 500
 #define HEALTH_UPDATE_INTERVAL_MS 1000
+#define STATUS_UPDATE_INTERVAL_MS 1000
 #define SPLASH_TYPEWRITER_CHAR_MS 50
 #define SPLASH_LINE_GAP_MS 80
 #define SPLASH_FINAL_HOLD_MS 200
@@ -29,11 +31,18 @@ LOG_MODULE_REGISTER(ui_manager, CONFIG_APP_LOG_LEVEL);
 ZBUS_CHAN_DECLARE(input_event_ch);
 ZBUS_CHAN_DECLARE(timer_state_ch);
 ZBUS_CHAN_DECLARE(feedback_cmd_ch);
+ZBUS_CHAN_DECLARE(sensor_data_ch);
+ZBUS_CHAN_DECLARE(pump_state_ch);
 
 extern const struct zbus_observer ui_event_sub;
 
 static bool in_restart_confirm;
 static bool restart_confirm_yes = true;
+
+static fixed_t current_flow_rate;
+static bool flow_data_valid;
+static bool pump_on;
+static int64_t pump_on_timestamp_ms;
 
 static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 {
@@ -46,6 +55,22 @@ static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 	if (ret < 0) {
 		LOG_WRN("Failed to publish feedback cmd: %d", ret);
 	}
+}
+
+static void draw_main_screen(uint8_t minutes, uint8_t seconds, bool flash)
+{
+	display_manager_show_time(minutes, seconds, flash);
+	int64_t uptime_s = 0;
+	if (pump_on) {
+		int64_t elapsed = k_uptime_get() - pump_on_timestamp_ms;
+		if (elapsed < 0) {
+			elapsed = 0;
+		}
+		uptime_s = elapsed / 1000;
+	}
+	display_manager_show_status_bar(current_flow_rate, pump_on, uptime_s,
+					flow_data_valid);
+	display_manager_update();
 }
 
 static void handle_input_event(const struct ui_input_event *event)
@@ -71,8 +96,7 @@ static void handle_input_event(const struct ui_input_event *event)
 				in_restart_confirm = false;
 				uint8_t minutes, seconds;
 				timer_sm_get_time(&minutes, &seconds);
-				display_manager_show_time(minutes, seconds, false);
-				display_manager_update();
+				draw_main_screen(minutes, seconds, false);
 			}
 		}
 		return;
@@ -166,26 +190,22 @@ static void handle_timer_state(const struct timer_state_msg *msg)
 
 	switch (msg->new_state) {
 	case TIMER_STATE_SETTING:
-		display_manager_show_time(minutes, seconds, false);
-		display_manager_update();
+		draw_main_screen(minutes, seconds, false);
 		break;
 
 	case TIMER_STATE_RUNNING:
-		display_manager_show_time(minutes, seconds, false);
-		display_manager_update();
+		draw_main_screen(minutes, seconds, false);
 		if (msg->remaining_seconds <= 10 && msg->remaining_seconds > 0) {
 			publish_feedback(FEEDBACK_ACTION_PULSE, 500);
 		}
 		break;
 
 	case TIMER_STATE_PAUSED:
-		display_manager_show_time(minutes, seconds, false);
-		display_manager_update();
+		draw_main_screen(minutes, seconds, false);
 		break;
 
 	case TIMER_STATE_COMPLETED:
-		display_manager_show_time(0, 0, true);
-		display_manager_update();
+		draw_main_screen(0, 0, true);
 		publish_feedback(FEEDBACK_ACTION_PULSE, 300);
 		break;
 	}
@@ -257,19 +277,20 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 
 	int64_t last_health_update = 0;
 	int64_t last_flash_toggle = 0;
+	int64_t last_status_update = 0;
 	bool flash_state = false;
 	enum timer_state current_state = TIMER_STATE_SETTING;
 
 	uint8_t minutes = 1, seconds = 0;
 	timer_sm_get_time(&minutes, &seconds);
-	display_manager_show_time(minutes, seconds, false);
-	display_manager_update();
+	draw_main_screen(minutes, seconds, false);
 
 	LOG_INF("UI ready - Timer at %02u:%02u", minutes, seconds);
 
 	while (true) {
 		const struct zbus_channel *chan;
-		uint8_t msg_buf[sizeof(struct timer_state_msg)];
+		uint8_t msg_buf[MAX(sizeof(struct sensor_data_msg),
+					    sizeof(struct pump_state_msg))];
 		int ret;
 
 		ret = zbus_sub_wait_msg(&ui_event_sub, &chan, msg_buf,
@@ -285,6 +306,27 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 				memcpy(&timer_evt, msg_buf, sizeof(timer_evt));
 				current_state = timer_evt.new_state;
 				handle_timer_state(&timer_evt);
+			} else if (chan == &sensor_data_ch) {
+				struct sensor_data_msg sensor_msg;
+				memcpy(&sensor_msg, msg_buf, sizeof(sensor_msg));
+				current_flow_rate = sensor_msg.flow_rate;
+				flow_data_valid = sensor_msg.data_valid;
+			} else if (chan == &pump_state_ch) {
+				struct pump_state_msg pump_msg;
+				memcpy(&pump_msg, msg_buf, sizeof(pump_msg));
+				if (pump_msg.change == PUMP_TURNED_ON) {
+					pump_on = true;
+					pump_on_timestamp_ms = k_uptime_get();
+				} else {
+					pump_on = false;
+					current_flow_rate = 0;
+					flow_data_valid = false;
+				}
+				if (!in_restart_confirm) {
+					uint8_t m, s;
+					timer_sm_get_time(&m, &s);
+					draw_main_screen(m, s, false);
+				}
 			}
 		}
 
@@ -294,13 +336,21 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 			if ((now - last_flash_toggle) >= FLASH_INTERVAL_MS) {
 				last_flash_toggle = now;
 				flash_state = !flash_state;
+				uint8_t minutes, seconds;
 				timer_sm_get_time(&minutes, &seconds);
-				display_manager_show_time(minutes, seconds,
-							  flash_state);
-				display_manager_update();
+				draw_main_screen(minutes, seconds, flash_state);
 			}
 		} else {
 			flash_state = false;
+		}
+
+		if (!in_restart_confirm &&
+		    current_state != TIMER_STATE_COMPLETED &&
+		    (now - last_status_update) >= STATUS_UPDATE_INTERVAL_MS) {
+			last_status_update = now;
+			uint8_t minutes, seconds;
+			timer_sm_get_time(&minutes, &seconds);
+			draw_main_screen(minutes, seconds, false);
 		}
 
 		if ((now - last_health_update) >= HEALTH_UPDATE_INTERVAL_MS) {

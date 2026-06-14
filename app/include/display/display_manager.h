@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <fixed_math.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,6 +61,22 @@ void display_manager_show_splash(uint8_t line1_chars, uint8_t line2_chars, bool 
  * @param flash If true, display will be inverted/flashing
  */
 void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash);
+
+/**
+ * @brief Display status bar at bottom of screen
+ *
+ * Shows pump state, flow rate, and motor uptime.
+ * - Pump ON with valid data: ">X.XX MM:SS"
+ * - Pump ON with invalid data: ">--.- MM:SS"
+ * - Pump OFF: "OFF"
+ *
+ * @param flow_rate Current flow rate in L/min (Q16.16 fixed-point)
+ * @param pump_on true if pump is running
+ * @param uptime_s Pump session uptime in seconds (0 if pump off)
+ * @param data_valid true if flow rate data is valid
+ */
+void display_manager_show_status_bar(fixed_t flow_rate, bool pump_on,
+				      int64_t uptime_s, bool data_valid);
 
 /**
  * @brief Show a two-option confirmation dialog

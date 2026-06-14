@@ -36,7 +36,7 @@ ZBUS_CHAN_DEFINE(sensor_data_ch,
 		 struct sensor_data_msg,
 		 NULL,
 		 NULL,
-		 ZBUS_OBSERVERS(flow_event_sub, pump_event_sub, safety_event_sub),
+		 ZBUS_OBSERVERS(flow_event_sub, pump_event_sub, safety_event_sub, ui_event_sub),
 		 ZBUS_MSG_INIT(.flow_rate = 0, .period_us = 0, .timestamp = 0,
 			       .data_valid = false, .sequence_number = 0));
 
@@ -52,7 +52,7 @@ ZBUS_CHAN_DEFINE(pump_state_ch,
 		 struct pump_state_msg,
 		 NULL,
 		 NULL,
-		 ZBUS_OBSERVERS(flow_event_sub, safety_event_sub),
+		 ZBUS_OBSERVERS(flow_event_sub, safety_event_sub, ui_event_sub),
 		 ZBUS_MSG_INIT(.change = PUMP_TURNED_OFF, .plateau_period_us = 0));
 
 ZBUS_CHAN_DEFINE(sensor_cmd_ch,

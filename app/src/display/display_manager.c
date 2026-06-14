@@ -20,8 +20,13 @@ static const struct device *display_dev;
 /* Display ready flag */
 static bool display_ready = false;
 
-/* Currently selected font index */
+/* Currently selected font index (large, for timer) */
 static uint8_t selected_font_idx = 0;
+
+/* Status bar font index (small, for status bar) */
+static uint8_t status_bar_font_idx = 0;
+static uint8_t status_bar_font_h = 0;
+static uint8_t status_bar_font_w = 0;
 
 int display_manager_init(void)
 {
@@ -70,6 +75,27 @@ int display_manager_init(void)
     selected_font_idx = largest_font_idx;
     LOG_INF("Using font %d (largest)", selected_font_idx);
     cfb_framebuffer_set_font(display_dev, selected_font_idx);
+
+    /* Find and select the smallest available font for status bar */
+    uint8_t smallest_font_idx = 0;
+    uint8_t smallest_font_h = UINT8_MAX;
+    uint8_t smallest_font_w = 0;
+    
+    for (uint8_t i = 0; i < num_fonts; i++) {
+        uint8_t w, h;
+        cfb_get_font_size(display_dev, i, &w, &h);
+        if (h < smallest_font_h) {
+            smallest_font_idx = i;
+            smallest_font_w = w;
+            smallest_font_h = h;
+        }
+    }
+    
+    status_bar_font_idx = smallest_font_idx;
+    status_bar_font_w = smallest_font_w;
+    status_bar_font_h = smallest_font_h;
+    LOG_INF("Status bar font %d (%dx%d)", status_bar_font_idx,
+            status_bar_font_w, status_bar_font_h);
 
     /* Clear display */
     cfb_framebuffer_clear(display_dev, true);
@@ -152,9 +178,10 @@ void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash)
     uint16_t text_width = 5 * font_width;
     uint16_t text_height = font_height;
     
-    /* Calculate centered position */
+    /* Calculate centered position (above status bar area) */
+    uint16_t available_height = display_height - status_bar_font_h;
     uint16_t x = (display_width - text_width) / 2;
-    uint16_t y = (display_height - text_height) / 2;
+    uint16_t y = (available_height - text_height) / 2;
 
     /* Clear framebuffer to appropriate background */
     cfb_framebuffer_clear(display_dev, flash);
@@ -218,6 +245,52 @@ void display_manager_show_dialog(const char *title, const char *opt_left,
 		cfb_invert_area(display_dev, right_x, opts_y,
 				right_len * dialog_font_w, dialog_font_h);
 	}
+
+	cfb_framebuffer_set_font(display_dev, selected_font_idx);
+}
+
+void display_manager_show_status_bar(fixed_t flow_rate, bool pump_on,
+				      int64_t uptime_s, bool data_valid)
+{
+	if (!display_ready) {
+		return;
+	}
+
+	uint16_t display_width = cfb_get_display_parameter(display_dev, CFB_DISPLAY_WIDTH);
+	uint16_t display_height = cfb_get_display_parameter(display_dev, CFB_DISPLAY_HEIGHT);
+
+	cfb_framebuffer_set_font(display_dev, status_bar_font_idx);
+
+	char status_buf[32];
+
+	if (pump_on) {
+		int32_t uptime_mins = (int32_t)(uptime_s / 60);
+		int32_t uptime_secs = (int32_t)(uptime_s % 60);
+
+		if (data_valid && flow_rate >= 0) {
+			int32_t int_part = flow_rate >> 16;
+			uint32_t frac_raw = (uint32_t)(flow_rate & 0xFFFF);
+			uint32_t frac_100 = (frac_raw * 100 + 32768) >> 16;
+			if (frac_100 >= 100) {
+				int_part += 1;
+				frac_100 -= 100;
+			}
+			snprintf(status_buf, sizeof(status_buf), ">%ld.%02ld %02ld:%02ld",
+				 (long)int_part, (long)frac_100,
+				 (long)uptime_mins, (long)uptime_secs);
+		} else {
+			snprintf(status_buf, sizeof(status_buf), ">--.- %02ld:%02ld",
+				 (long)uptime_mins, (long)uptime_secs);
+		}
+	} else {
+		strcpy(status_buf, "OFF");
+	}
+
+	uint16_t text_width = strlen(status_buf) * status_bar_font_w;
+	uint16_t x = (display_width - text_width) / 2;
+	uint16_t y = display_height - status_bar_font_h;
+
+	cfb_print(display_dev, status_buf, x, y);
 
 	cfb_framebuffer_set_font(display_dev, selected_font_idx);
 }
