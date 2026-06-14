@@ -53,30 +53,42 @@ void display_manager_clear(void);
  */
 void display_manager_show_splash(uint8_t line1_chars, uint8_t line2_chars, bool inverted);
 
+#define FLOW_HISTORY_SIZE 128
+
 /**
- * @brief Display time in MM:SS format centered on screen
+ * @brief Display time in MM:SS format in the header row
  *
  * @param minutes Minutes value (0-99)
  * @param seconds Seconds value (0-59)
- * @param flash If true, display will be inverted/flashing
+ * @param flash If true, header area will be inverted for flash effect
  */
-void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash);
+void display_manager_show_time_header(uint8_t minutes, uint8_t seconds, bool flash);
+
+/**
+ * @brief Display flow rate line graph in the plot area
+ *
+ * Draws a scrolling line chart of flow rate history between
+ * the header and footer rows. Auto-scales Y axis to fit data.
+ *
+ * @param history Ring buffer of fixed_t flow rate samples (FLOW_HISTORY_SIZE elements)
+ * @param count Number of valid samples in the buffer (0 to FLOW_HISTORY_SIZE)
+ * @param start_idx Index of the oldest sample in the ring buffer
+ */
+void display_manager_show_flow_plot(const fixed_t *history, int count, int start_idx);
 
 /**
  * @brief Display status bar at bottom of screen
  *
- * Shows pump state, flow rate, and motor uptime.
- * - Pump ON with valid data: ">X.XX MM:SS"
- * - Pump ON with invalid data: ">--.- MM:SS"
- * - Pump OFF: "OFF"
+ * Shows flow rate and motor uptime in two columns.
+ * Left column (centered): flow rate ("X.XX")
+ * Right column (centered): uptime ("MM:SS") when pump on, "OFF" when pump off
  *
  * @param flow_rate Current flow rate in L/min (Q16.16 fixed-point)
  * @param pump_on true if pump is running
  * @param uptime_s Pump session uptime in seconds (0 if pump off)
- * @param data_valid true if flow rate data is valid
  */
 void display_manager_show_status_bar(fixed_t flow_rate, bool pump_on,
-				      int64_t uptime_s, bool data_valid);
+				      int64_t uptime_s);
 
 /**
  * @brief Show a two-option confirmation dialog

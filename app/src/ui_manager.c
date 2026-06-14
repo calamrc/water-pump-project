@@ -23,7 +23,8 @@ LOG_MODULE_REGISTER(ui_manager, CONFIG_APP_LOG_LEVEL);
 
 #define FLASH_INTERVAL_MS 500
 #define HEALTH_UPDATE_INTERVAL_MS 1000
-#define STATUS_UPDATE_INTERVAL_MS 1000
+#define STATUS_UPDATE_INTERVAL_MS 250
+#define SENSOR_STALE_MS 1000
 #define SPLASH_TYPEWRITER_CHAR_MS 50
 #define SPLASH_LINE_GAP_MS 80
 #define SPLASH_FINAL_HOLD_MS 200
@@ -41,8 +42,34 @@ static bool restart_confirm_yes = true;
 
 static fixed_t current_flow_rate;
 static bool flow_data_valid;
+static int64_t last_sensor_data_ms;
 static bool pump_on;
 static int64_t pump_on_timestamp_ms;
+
+static fixed_t flow_history[FLOW_HISTORY_SIZE];
+static int flow_history_count;
+static int flow_history_write_idx;
+
+static void sample_flow_rate(void)
+{
+	if (!flow_data_valid) {
+		flow_history[flow_history_write_idx] = FIXED_MIN;
+	} else {
+		flow_history[flow_history_write_idx] = current_flow_rate;
+	}
+	flow_history_write_idx = (flow_history_write_idx + 1) % FLOW_HISTORY_SIZE;
+	if (flow_history_count < FLOW_HISTORY_SIZE) {
+		flow_history_count++;
+	}
+}
+
+static int flow_history_start_idx(void)
+{
+	if (flow_history_count < FLOW_HISTORY_SIZE) {
+		return 0;
+	}
+	return flow_history_write_idx;
+}
 
 static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 {
@@ -59,7 +86,13 @@ static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 
 static void draw_main_screen(uint8_t minutes, uint8_t seconds, bool flash)
 {
-	display_manager_show_time(minutes, seconds, flash);
+	display_manager_clear();
+
+	display_manager_show_time_header(minutes, seconds, flash);
+
+	display_manager_show_flow_plot(flow_history, flow_history_count,
+				       flow_history_start_idx());
+
 	int64_t uptime_s = 0;
 	if (pump_on) {
 		int64_t elapsed = k_uptime_get() - pump_on_timestamp_ms;
@@ -68,8 +101,7 @@ static void draw_main_screen(uint8_t minutes, uint8_t seconds, bool flash)
 		}
 		uptime_s = elapsed / 1000;
 	}
-	display_manager_show_status_bar(current_flow_rate, pump_on, uptime_s,
-					flow_data_valid);
+	display_manager_show_status_bar(current_flow_rate, pump_on, uptime_s);
 	display_manager_update();
 }
 
@@ -278,6 +310,7 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 	int64_t last_health_update = 0;
 	int64_t last_flash_toggle = 0;
 	int64_t last_status_update = 0;
+	int64_t last_flow_sample = 0;
 	bool flash_state = false;
 	enum timer_state current_state = TIMER_STATE_SETTING;
 
@@ -311,6 +344,7 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 				memcpy(&sensor_msg, msg_buf, sizeof(sensor_msg));
 				current_flow_rate = sensor_msg.flow_rate;
 				flow_data_valid = sensor_msg.data_valid;
+				last_sensor_data_ms = k_uptime_get();
 			} else if (chan == &pump_state_ch) {
 				struct pump_state_msg pump_msg;
 				memcpy(&pump_msg, msg_buf, sizeof(pump_msg));
@@ -319,8 +353,6 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 					pump_on_timestamp_ms = k_uptime_get();
 				} else {
 					pump_on = false;
-					current_flow_rate = 0;
-					flow_data_valid = false;
 				}
 				if (!in_restart_confirm) {
 					uint8_t m, s;
@@ -331,6 +363,12 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 		}
 
 		int64_t now = k_uptime_get();
+
+		if (flow_data_valid && last_sensor_data_ms > 0 &&
+		    (now - last_sensor_data_ms) > SENSOR_STALE_MS) {
+			flow_data_valid = false;
+			current_flow_rate = 0;
+		}
 
 		if (current_state == TIMER_STATE_COMPLETED && !in_restart_confirm) {
 			if ((now - last_flash_toggle) >= FLASH_INTERVAL_MS) {
@@ -348,9 +386,19 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 		    current_state != TIMER_STATE_COMPLETED &&
 		    (now - last_status_update) >= STATUS_UPDATE_INTERVAL_MS) {
 			last_status_update = now;
+			if ((now - last_flow_sample) >= STATUS_UPDATE_INTERVAL_MS) {
+				last_flow_sample = now;
+				sample_flow_rate();
+			}
 			uint8_t minutes, seconds;
 			timer_sm_get_time(&minutes, &seconds);
 			draw_main_screen(minutes, seconds, false);
+		}
+
+		if ((now - last_flow_sample) >= STATUS_UPDATE_INTERVAL_MS &&
+		    current_state == TIMER_STATE_COMPLETED && !in_restart_confirm) {
+			last_flow_sample = now;
+			sample_flow_rate();
 		}
 
 		if ((now - last_health_update) >= HEALTH_UPDATE_INTERVAL_MS) {
