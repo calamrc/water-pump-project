@@ -24,7 +24,9 @@ static atomic_t encoder_accumulator = ATOMIC_INIT(0);
 static atomic_t encoder_delta = ATOMIC_INIT(0);
 
 static atomic_t button_pressed = ATOMIC_INIT(0);
-static atomic_t long_press_reported = ATOMIC_INIT(0);
+static atomic_t long_press_pending = ATOMIC_INIT(0);
+static atomic_t button_short_press = ATOMIC_INIT(0);
+static atomic_t button_long_press = ATOMIC_INIT(0);
 
 static atomic_t input_enabled = ATOMIC_INIT(1);
 
@@ -43,8 +45,9 @@ static void long_press_timer_handler(struct k_timer *timer)
 		return;
 	}
 
-	if (atomic_get(&button_pressed) && !atomic_get(&long_press_reported)) {
-		atomic_set(&long_press_reported, 1);
+	if (atomic_get(&button_pressed) && !atomic_get(&long_press_pending)) {
+		atomic_set(&long_press_pending, 1);
+		atomic_set(&button_long_press, 1);
 		k_work_submit(&input_publish_work);
 	}
 }
@@ -76,12 +79,13 @@ static void input_callback(struct input_event *evt, void *user_data)
 	if (evt->type == INPUT_EV_KEY && evt->code == INPUT_KEY_ENTER) {
 		if (evt->value == 1) {
 			atomic_set(&button_pressed, 1);
-			atomic_set(&long_press_reported, 0);
+			atomic_set(&long_press_pending, 0);
 			k_timer_start(&long_press_timer, K_MSEC(LONG_PRESS_MS), K_NO_WAIT);
 		} else if (evt->value == 0) {
 			k_timer_stop(&long_press_timer);
 
-			if (atomic_get(&button_pressed) && !atomic_get(&long_press_reported)) {
+			if (atomic_get(&button_pressed) && !atomic_get(&long_press_pending)) {
+				atomic_set(&button_short_press, 1);
 				k_work_submit(&input_publish_work);
 			}
 
@@ -108,11 +112,12 @@ static void input_publish_work_handler(struct k_work *work)
 		atomic_set(&encoder_delta, 0);
 	}
 
-	if (atomic_get(&button_pressed) && atomic_get(&long_press_reported)) {
+	if (atomic_get(&button_long_press)) {
 		event.button_press = BUTTON_PRESS_LONG;
-		atomic_set(&long_press_reported, 0);
-	} else if (!atomic_get(&button_pressed) && !atomic_get(&long_press_reported)) {
+		atomic_set(&button_long_press, 0);
+	} else if (atomic_get(&button_short_press)) {
 		event.button_press = BUTTON_PRESS_SHORT;
+		atomic_set(&button_short_press, 0);
 	}
 
 	if (event.encoder_moved || event.button_press != BUTTON_PRESS_NONE) {
@@ -138,7 +143,9 @@ int input_manager_init(void)
 	atomic_set(&encoder_accumulator, 0);
 	atomic_set(&encoder_delta, 0);
 	atomic_set(&button_pressed, 0);
-	atomic_set(&long_press_reported, 0);
+	atomic_set(&long_press_pending, 0);
+	atomic_set(&button_short_press, 0);
+	atomic_set(&button_long_press, 0);
 	atomic_set(&input_enabled, 1);
 
 	k_timer_init(&long_press_timer, long_press_timer_handler, NULL);
