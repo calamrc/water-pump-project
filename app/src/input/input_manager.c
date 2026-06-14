@@ -18,6 +18,7 @@
 LOG_MODULE_REGISTER(input_manager, CONFIG_APP_LOG_LEVEL);
 
 #define LONG_PRESS_MS 1000
+#define HOLD_PRESS_MS 3000
 #define ENCODER_STEPS_PER_DETENT 2
 
 static atomic_t encoder_accumulator = ATOMIC_INIT(0);
@@ -25,12 +26,15 @@ static atomic_t encoder_delta = ATOMIC_INIT(0);
 
 static atomic_t button_pressed = ATOMIC_INIT(0);
 static atomic_t long_press_pending = ATOMIC_INIT(0);
+static atomic_t hold_press_pending = ATOMIC_INIT(0);
 static atomic_t button_short_press = ATOMIC_INIT(0);
 static atomic_t button_long_press = ATOMIC_INIT(0);
+static atomic_t button_hold_press = ATOMIC_INIT(0);
 
 static atomic_t input_enabled = ATOMIC_INIT(1);
 
 static struct k_timer long_press_timer;
+static struct k_timer hold_press_timer;
 
 ZBUS_CHAN_DECLARE(input_event_ch);
 
@@ -45,9 +49,23 @@ static void long_press_timer_handler(struct k_timer *timer)
 		return;
 	}
 
-	if (atomic_get(&button_pressed) && !atomic_get(&long_press_pending)) {
+	if (atomic_get(&button_pressed)) {
 		atomic_set(&long_press_pending, 1);
-		atomic_set(&button_long_press, 1);
+	}
+}
+
+static void hold_press_timer_handler(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+
+	if (!atomic_get(&input_enabled)) {
+		return;
+	}
+
+	if (atomic_get(&button_pressed) && !atomic_get(&hold_press_pending)) {
+		atomic_set(&hold_press_pending, 1);
+		atomic_set(&button_hold_press, 1);
+		k_timer_stop(&long_press_timer);
 		k_work_submit(&input_publish_work);
 	}
 }
@@ -80,12 +98,19 @@ static void input_callback(struct input_event *evt, void *user_data)
 		if (evt->value == 1) {
 			atomic_set(&button_pressed, 1);
 			atomic_set(&long_press_pending, 0);
+			atomic_set(&hold_press_pending, 0);
 			k_timer_start(&long_press_timer, K_MSEC(LONG_PRESS_MS), K_NO_WAIT);
+			k_timer_start(&hold_press_timer, K_MSEC(HOLD_PRESS_MS), K_NO_WAIT);
 		} else if (evt->value == 0) {
 			k_timer_stop(&long_press_timer);
+			k_timer_stop(&hold_press_timer);
 
-			if (atomic_get(&button_pressed) && !atomic_get(&long_press_pending)) {
-				atomic_set(&button_short_press, 1);
+			if (atomic_get(&button_pressed) && !atomic_get(&hold_press_pending)) {
+				if (atomic_get(&long_press_pending)) {
+					atomic_set(&button_long_press, 1);
+				} else {
+					atomic_set(&button_short_press, 1);
+				}
 				k_work_submit(&input_publish_work);
 			}
 
@@ -112,7 +137,10 @@ static void input_publish_work_handler(struct k_work *work)
 		atomic_set(&encoder_delta, 0);
 	}
 
-	if (atomic_get(&button_long_press)) {
+	if (atomic_get(&button_hold_press)) {
+		event.button_press = BUTTON_PRESS_HOLD;
+		atomic_set(&button_hold_press, 0);
+	} else if (atomic_get(&button_long_press)) {
 		event.button_press = BUTTON_PRESS_LONG;
 		atomic_set(&button_long_press, 0);
 	} else if (atomic_get(&button_short_press)) {
@@ -125,8 +153,21 @@ static void input_publish_work_handler(struct k_work *work)
 			LOG_DBG("Encoder event: delta=%d", event.encoder_delta);
 		}
 		if (event.button_press != BUTTON_PRESS_NONE) {
-			LOG_INF("Button event: %s",
-				event.button_press == BUTTON_PRESS_SHORT ? "SHORT" : "LONG");
+			const char *press_name = "NONE";
+			switch (event.button_press) {
+			case BUTTON_PRESS_SHORT:
+				press_name = "SHORT";
+				break;
+			case BUTTON_PRESS_LONG:
+				press_name = "LONG";
+				break;
+			case BUTTON_PRESS_HOLD:
+				press_name = "HOLD";
+				break;
+			default:
+				break;
+			}
+			LOG_INF("Button event: %s", press_name);
 		}
 
 		int ret = zbus_chan_pub(&input_event_ch, &event, K_MSEC(100));
@@ -144,11 +185,14 @@ int input_manager_init(void)
 	atomic_set(&encoder_delta, 0);
 	atomic_set(&button_pressed, 0);
 	atomic_set(&long_press_pending, 0);
+	atomic_set(&hold_press_pending, 0);
 	atomic_set(&button_short_press, 0);
 	atomic_set(&button_long_press, 0);
+	atomic_set(&button_hold_press, 0);
 	atomic_set(&input_enabled, 1);
 
 	k_timer_init(&long_press_timer, long_press_timer_handler, NULL);
+	k_timer_init(&hold_press_timer, hold_press_timer_handler, NULL);
 	k_work_init(&input_publish_work, input_publish_work_handler);
 
 	LOG_INF("Input manager initialized");
@@ -161,5 +205,6 @@ void input_manager_enable(bool enable)
 
 	if (!enable) {
 		k_timer_stop(&long_press_timer);
+		k_timer_stop(&hold_press_timer);
 	}
 }

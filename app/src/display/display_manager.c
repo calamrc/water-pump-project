@@ -166,6 +166,62 @@ void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash)
             time_str, x, y, selected_font_idx, flash, flash ? "WHITE" : "BLACK");
 }
 
+void display_manager_show_dialog(const char *title, const char *opt_left,
+				 const char *opt_right, bool left_selected)
+{
+	if (!display_ready) {
+		return;
+	}
+
+	uint16_t display_width = cfb_get_display_parameter(display_dev, CFB_DISPLAY_WIDTH);
+	uint16_t display_height = cfb_get_display_parameter(display_dev, CFB_DISPLAY_HEIGHT);
+	uint8_t num_fonts = cfb_get_numof_fonts(display_dev);
+
+	uint8_t dialog_font_idx = 0;
+	uint8_t dialog_font_h = UINT8_MAX;
+	uint8_t dialog_font_w = 0;
+
+	for (uint8_t i = 0; i < num_fonts; i++) {
+		uint8_t w, h;
+		cfb_get_font_size(display_dev, i, &w, &h);
+		if (h < dialog_font_h) {
+			dialog_font_idx = i;
+			dialog_font_w = w;
+			dialog_font_h = h;
+		}
+	}
+
+	cfb_framebuffer_set_font(display_dev, dialog_font_idx);
+	cfb_framebuffer_clear(display_dev, false);
+
+	uint8_t title_len = strlen(title);
+	uint16_t title_x = (display_width - title_len * dialog_font_w) / 2;
+	uint16_t title_y = (display_height / 2 - dialog_font_h) / 2;
+	cfb_print(display_dev, title, title_x, title_y);
+
+	uint8_t left_len = strlen(opt_left);
+	uint8_t right_len = strlen(opt_right);
+	uint8_t gap = 2;
+	uint16_t opts_width = (left_len + right_len + gap) * dialog_font_w;
+	uint16_t opts_x = (display_width - opts_width) / 2;
+	uint16_t opts_y = display_height / 2 + (display_height / 2 - dialog_font_h) / 2;
+
+	cfb_print(display_dev, opt_left, opts_x, opts_y);
+	cfb_print(display_dev, opt_right,
+		  opts_x + (left_len + gap) * dialog_font_w, opts_y);
+
+	if (left_selected) {
+		cfb_invert_area(display_dev, opts_x, opts_y,
+				left_len * dialog_font_w, dialog_font_h);
+	} else {
+		uint16_t right_x = opts_x + (left_len + gap) * dialog_font_w;
+		cfb_invert_area(display_dev, right_x, opts_y,
+				right_len * dialog_font_w, dialog_font_h);
+	}
+
+	cfb_framebuffer_set_font(display_dev, selected_font_idx);
+}
+
 void display_manager_update(void)
 {
     if (!display_ready) {

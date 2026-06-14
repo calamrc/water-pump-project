@@ -21,6 +21,7 @@ enum button_press_type {
 	BUTTON_PRESS_NONE = 0,
 	BUTTON_PRESS_SHORT,
 	BUTTON_PRESS_LONG,
+	BUTTON_PRESS_HOLD,
 };
 
 /* Application input event structure */

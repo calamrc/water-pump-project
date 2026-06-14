@@ -62,6 +62,20 @@ void display_manager_show_splash(uint8_t line1_chars, uint8_t line2_chars, bool 
 void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash);
 
 /**
+ * @brief Show a two-option confirmation dialog
+ *
+ * Displays a title on the first row and two options on the second row.
+ * The selected option is inverted (highlighted).
+ *
+ * @param title Title text for the first row
+ * @param opt_left Left option text (e.g. "YES")
+ * @param opt_right Right option text (e.g. "NO")
+ * @param left_selected true to highlight left option, false for right
+ */
+void display_manager_show_dialog(const char *title, const char *opt_left,
+				 const char *opt_right, bool left_selected);
+
+/**
  * @brief Update the display (flush framebuffer to display)
  */
 void display_manager_update(void);

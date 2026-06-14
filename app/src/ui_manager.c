@@ -15,6 +15,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/reboot.h>
 #include <zephyr/zbus/zbus.h>
 
 LOG_MODULE_REGISTER(ui_manager, CONFIG_APP_LOG_LEVEL);
@@ -31,6 +32,9 @@ ZBUS_CHAN_DECLARE(feedback_cmd_ch);
 
 extern const struct zbus_observer ui_event_sub;
 
+static bool in_restart_confirm;
+static bool restart_confirm_yes = true;
+
 static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 {
 	struct feedback_cmd_msg msg = {
@@ -46,6 +50,46 @@ static void publish_feedback(enum feedback_action action, uint32_t duration_ms)
 
 static void handle_input_event(const struct ui_input_event *event)
 {
+	if (in_restart_confirm) {
+		if (event->encoder_moved && event->encoder_delta != 0) {
+			if (event->encoder_delta > 0) {
+				restart_confirm_yes = false;
+			} else {
+				restart_confirm_yes = true;
+			}
+			display_manager_show_dialog("Restart?", "Yes", "No", restart_confirm_yes);
+			display_manager_update();
+			publish_feedback(FEEDBACK_ACTION_CLICK, 0);
+		}
+
+		if (event->button_press == BUTTON_PRESS_SHORT) {
+			if (restart_confirm_yes) {
+				LOG_INF("Reboot confirmed by user");
+				sys_reboot(SYS_REBOOT_COLD);
+			} else {
+				LOG_INF("Reboot cancelled by user");
+				in_restart_confirm = false;
+				uint8_t minutes, seconds;
+				timer_sm_get_time(&minutes, &seconds);
+				display_manager_show_time(minutes, seconds, false);
+				display_manager_update();
+			}
+		}
+		return;
+	}
+
+	if (event->button_press == BUTTON_PRESS_HOLD) {
+		LOG_INF("Hold detected - entering restart confirmation");
+		in_restart_confirm = true;
+		restart_confirm_yes = true;
+		input_manager_enable(false);
+		display_manager_show_dialog("Restart?", "Yes", "No", true);
+		display_manager_update();
+		publish_feedback(FEEDBACK_ACTION_CLICK, 0);
+		input_manager_enable(true);
+		return;
+	}
+
 	enum timer_state current_state = timer_sm_get_state();
 
 	if (event->encoder_moved && event->encoder_delta != 0) {
@@ -55,10 +99,13 @@ static void handle_input_event(const struct ui_input_event *event)
 	}
 
 	if (event->button_press != BUTTON_PRESS_NONE) {
+		publish_feedback(FEEDBACK_ACTION_CLICK, 0);
+
 		current_state = timer_sm_get_state();
 
 		LOG_INF("Button: %s (state=%s)",
-			event->button_press == BUTTON_PRESS_SHORT ? "SHORT" : "LONG",
+			event->button_press == BUTTON_PRESS_SHORT ? "SHORT" :
+			event->button_press == BUTTON_PRESS_LONG ? "LONG" : "HOLD",
 			timer_sm_state_to_string(current_state));
 
 		switch (current_state) {
@@ -67,8 +114,7 @@ static void handle_input_event(const struct ui_input_event *event)
 				LOG_INF("Action: START");
 				timer_sm_start();
 			} else if (event->button_press == BUTTON_PRESS_LONG) {
-				LOG_INF("Action: RESET with feedback test");
-				publish_feedback(FEEDBACK_ACTION_PULSE, 1000);
+				LOG_INF("Action: RESET");
 				timer_sm_reset();
 			}
 			break;
@@ -106,6 +152,10 @@ static void handle_input_event(const struct ui_input_event *event)
 
 static void handle_timer_state(const struct timer_state_msg *msg)
 {
+	if (in_restart_confirm) {
+		return;
+	}
+
 	uint8_t minutes, seconds;
 	timer_sm_get_time(&minutes, &seconds);
 
@@ -240,7 +290,7 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 
 		int64_t now = k_uptime_get();
 
-		if (current_state == TIMER_STATE_COMPLETED) {
+		if (current_state == TIMER_STATE_COMPLETED && !in_restart_confirm) {
 			if ((now - last_flash_toggle) >= FLASH_INTERVAL_MS) {
 				last_flash_toggle = now;
 				flash_state = !flash_state;
