@@ -10,6 +10,7 @@
 #include <zephyr/display/cfb.h>
 #include <zephyr/logging/log.h>
 #include <stdio.h>
+#include <string.h>
 
 LOG_MODULE_REGISTER(display_manager, CONFIG_APP_LOG_LEVEL);
 
@@ -91,6 +92,42 @@ void display_manager_clear(void)
     }
 
     cfb_framebuffer_clear(display_dev, false);
+}
+
+void display_manager_show_splash(uint8_t line1_chars, uint8_t line2_chars, bool inverted)
+{
+	if (!display_ready) {
+		return;
+	}
+
+	uint16_t display_width = cfb_get_display_parameter(display_dev, CFB_DISPLAY_WIDTH);
+	uint8_t font_width, font_height;
+	cfb_get_font_size(display_dev, selected_font_idx, &font_width, &font_height);
+
+	static const char line1[] = "WATER";
+	static const char line2[] = "PUMP";
+
+	cfb_framebuffer_clear(display_dev, false);
+
+	if (line1_chars > 0) {
+		uint8_t n = line1_chars > 5 ? 5 : line1_chars;
+		char buf[6] = {0};
+		memcpy(buf, line1, n);
+		uint16_t x = (display_width - n * font_width) / 2;
+		cfb_print(display_dev, buf, x, 0);
+	}
+
+	if (line2_chars > 0) {
+		uint8_t n = line2_chars > 4 ? 4 : line2_chars;
+		char buf[5] = {0};
+		memcpy(buf, line2, n);
+		uint16_t x = (display_width - n * font_width) / 2;
+		cfb_print(display_dev, buf, x, font_height);
+	}
+
+	if (inverted) {
+		cfb_invert_area(display_dev, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+	}
 }
 
 void display_manager_show_time(uint8_t minutes, uint8_t seconds, bool flash)

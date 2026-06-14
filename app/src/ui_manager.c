@@ -21,6 +21,9 @@ LOG_MODULE_REGISTER(ui_manager, CONFIG_APP_LOG_LEVEL);
 
 #define FLASH_INTERVAL_MS 500
 #define HEALTH_UPDATE_INTERVAL_MS 1000
+#define SPLASH_TYPEWRITER_CHAR_MS 50
+#define SPLASH_LINE_GAP_MS 80
+#define SPLASH_FINAL_HOLD_MS 200
 
 ZBUS_CHAN_DECLARE(input_event_ch);
 ZBUS_CHAN_DECLARE(timer_state_ch);
@@ -169,6 +172,38 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 	LOG_INF("========================================");
 	LOG_INF("UI THREAD STARTED - EVENT DRIVEN ZBUS");
 	LOG_INF("========================================");
+
+	display_manager_show_splash(0, 0, true);
+	display_manager_update();
+	k_sleep(K_MSEC(SPLASH_TYPEWRITER_CHAR_MS));
+
+	publish_feedback(FEEDBACK_ACTION_CLICK, 0);
+
+	for (uint8_t i = 1; i <= 9; i++) {
+		uint8_t line1 = i <= 5 ? i : 5;
+		uint8_t line2 = i > 5 ? i - 5 : 0;
+		display_manager_show_splash(line1, line2, true);
+		display_manager_update();
+
+		if (i == 6) {
+			publish_feedback(FEEDBACK_ACTION_CLICK, 0);
+		}
+
+		if (i == 5) {
+			k_sleep(K_MSEC(SPLASH_LINE_GAP_MS));
+		} else {
+			k_sleep(K_MSEC(SPLASH_TYPEWRITER_CHAR_MS));
+		}
+	}
+
+	k_sleep(K_MSEC(SPLASH_FINAL_HOLD_MS));
+
+	display_manager_clear();
+	display_manager_update();
+
+	display_manager_show_splash(5, 4, false);
+	display_manager_update();
+	k_sleep(K_MSEC(SPLASH_FINAL_HOLD_MS));
 
 	int64_t last_health_update = 0;
 	int64_t last_flash_toggle = 0;

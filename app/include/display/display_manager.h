@@ -40,6 +40,19 @@ bool display_manager_is_ready(void);
 void display_manager_clear(void);
 
 /**
+ * @brief Display partial splash text for animation
+ *
+ * Renders up to @p line1_chars characters of "WATER" and
+ * @p line2_chars characters of "PUMP", centered on the display.
+ * Use to animate the splash by incrementing char counts over time.
+ *
+ * @param line1_chars Number of characters to show from "WATER" (0-5)
+ * @param line2_chars Number of characters to show from "PUMP" (0-4)
+ * @param inverted If true, inverts the entire display
+ */
+void display_manager_show_splash(uint8_t line1_chars, uint8_t line2_chars, bool inverted);
+
+/**
  * @brief Display time in MM:SS format centered on screen
  *
  * @param minutes Minutes value (0-99)
