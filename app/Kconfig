@@ -99,15 +99,9 @@ config PUMP_CONTROLLER_STACK_SIZE
 
 config SAFETY_MONITOR_STACK_SIZE
 	int "Safety monitor thread stack size (bytes)"
-	default 1536
-	help
-	  Stack size for the safety monitor thread in bytes.
-
-config SUPERVISOR_STACK_SIZE
-	int "Supervisor thread stack size (bytes)"
 	default 2048
 	help
-	  Stack size for the supervisor thread in bytes.
+	  Stack size for the safety monitor thread in bytes.
 
 config SENSOR_MONITOR_PRIORITY
 	int "Sensor monitor thread priority"
@@ -130,13 +124,6 @@ config SAFETY_MONITOR_PRIORITY
 	help
 	  Priority of the safety monitor thread (lower number = higher priority).
 
-config SUPERVISOR_PRIORITY
-	int "Supervisor thread priority"
-	default 7
-	range 0 15
-	help
-	  Priority of the supervisor thread (lower number = higher priority).
-
 config SAFETY_MONITOR_CHECK_INTERVAL_MS
 	int "Safety monitor check interval (ms)"
 	default 500
@@ -157,6 +144,14 @@ config SAFETY_MONITOR_WARNING_THRESHOLD_MINUTES
 	range 1 120
 	help
 	  Runtime threshold in minutes when warnings are issued before emergency stop.
+
+config APP_SAFETY_MONITOR_MAX_SENSOR_TIMEOUT_MS
+	int "Maximum sensor data stall timeout (ms)"
+	default 5000
+	help
+	  Maximum time in milliseconds without sensor data while the pump is on
+	  before triggering an emergency stop. This detects sensor monitor thread
+	  stalls.
 
 config UI_MANAGER_STACK_SIZE
 	int "UI manager thread stack size (bytes)"
