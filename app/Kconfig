@@ -109,12 +109,6 @@ config SUPERVISOR_STACK_SIZE
 	help
 	  Stack size for the supervisor thread in bytes.
 
-config APP_SENSOR_MSGQ_SIZE
-	int "Sensor data message queue size"
-	default 4
-	help
-	  Maximum number of sensor data messages in the queue.
-
 config SENSOR_MONITOR_PRIORITY
 	int "Sensor monitor thread priority"
 	default 2
@@ -176,6 +170,19 @@ config UI_MANAGER_PRIORITY
 	range 0 15
 	help
 	  Priority of the UI manager thread (lower number = higher priority).
+
+config FLOW_ANALYZER_STACK_SIZE
+	int "Flow analyzer thread stack size (bytes)"
+	default 3072
+	help
+	  Stack size for the flow analyzer thread in bytes.
+
+config FLOW_ANALYZER_PRIORITY
+	int "Flow analyzer thread priority"
+	default 3
+	range 0 15
+	help
+	  Priority of the flow analyzer thread (lower number = higher priority).
 
 endmenu
 

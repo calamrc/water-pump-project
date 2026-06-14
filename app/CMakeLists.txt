@@ -18,6 +18,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
   src/main.c
   src/flow_analyzer.c
+  src/flow_analyzer_thread.c
   src/error_handler.c
   src/thread_manager.c
   src/ui_manager.c
