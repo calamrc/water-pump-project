@@ -322,8 +322,10 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 
 	while (true) {
 		const struct zbus_channel *chan;
-		uint8_t msg_buf[MAX(sizeof(struct sensor_data_msg),
-					    sizeof(struct pump_state_msg))];
+		uint8_t msg_buf[MAX(MAX(sizeof(struct sensor_data_msg),
+					sizeof(struct pump_state_msg)),
+				   MAX(sizeof(struct ui_input_event),
+					sizeof(struct timer_state_msg)))];
 		int ret;
 
 		ret = zbus_sub_wait_msg(&ui_event_sub, &chan, msg_buf,
@@ -358,6 +360,45 @@ void ui_manager_thread(void *arg1, void *arg2, void *arg3)
 					uint8_t m, s;
 					timer_sm_get_time(&m, &s);
 					draw_main_screen(m, s, false);
+				}
+			}
+
+			while (zbus_sub_wait_msg(&ui_event_sub, &chan, msg_buf,
+						 K_NO_WAIT) == 0) {
+				if (chan == &sensor_data_ch) {
+					struct sensor_data_msg sensor_msg;
+					memcpy(&sensor_msg, msg_buf,
+					       sizeof(sensor_msg));
+					current_flow_rate = sensor_msg.flow_rate;
+					flow_data_valid = sensor_msg.data_valid;
+					last_sensor_data_ms = k_uptime_get();
+				} else if (chan == &input_event_ch) {
+					struct ui_input_event input_evt;
+					memcpy(&input_evt, msg_buf,
+					       sizeof(input_evt));
+					handle_input_event(&input_evt);
+				} else if (chan == &timer_state_ch) {
+					struct timer_state_msg timer_evt;
+					memcpy(&timer_evt, msg_buf,
+					       sizeof(timer_evt));
+					current_state = timer_evt.new_state;
+					handle_timer_state(&timer_evt);
+				} else if (chan == &pump_state_ch) {
+					struct pump_state_msg pump_msg;
+					memcpy(&pump_msg, msg_buf,
+					       sizeof(pump_msg));
+					if (pump_msg.change == PUMP_TURNED_ON) {
+						pump_on = true;
+						pump_on_timestamp_ms =
+							k_uptime_get();
+					} else {
+						pump_on = false;
+					}
+					if (!in_restart_confirm) {
+						uint8_t m, s;
+						timer_sm_get_time(&m, &s);
+						draw_main_screen(m, s, false);
+					}
 				}
 			}
 		}

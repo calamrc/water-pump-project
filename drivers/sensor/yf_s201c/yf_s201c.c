@@ -104,25 +104,26 @@ void yf_s201c_work_handler(struct k_work *work)
         // Protect period buffer
         k_mutex_lock(&data->mutex, K_FOREVER);
 
-        if (data->valid_periods >= data->buffer_size) {
-            int64_t median = yf_s201c_get_median((int64_t *)data->period_buffer, data->buffer_size);
+if (data->valid_periods >= data->buffer_size) {
+			int64_t median = yf_s201c_get_median((int64_t *)data->period_buffer, data->buffer_size);
 
-            // Outlier rejection
-            if (current_period_us < (median / 1.5) || current_period_us > (median * 1.5)) {
-                data->period_us = median;
-                data->period_buffer[data->buffer_index] = median;
-            } else {
-                data->period_us = current_period_us;
-                data->period_buffer[data->buffer_index] = current_period_us;
-            }
-        } else {
-            data->period_us = current_period_us;
-            data->period_buffer[data->buffer_index] = current_period_us;
+			// Outlier rejection: use median for smoothed output,
+			// but always write actual measurement to buffer so median
+			// can evolve with flow rate changes.
+			if (current_period_us < (median / 1.5) || current_period_us > (median * 1.5)) {
+				data->period_us = median;
+			} else {
+				data->period_us = current_period_us;
+			}
+			data->period_buffer[data->buffer_index] = current_period_us;
+		} else {
+			data->period_us = current_period_us;
+			data->period_buffer[data->buffer_index] = current_period_us;
 
-            if (data->valid_periods < data->buffer_size) {
-                data->valid_periods++;
-            }
-        }
+			if (data->valid_periods < data->buffer_size) {
+				data->valid_periods++;
+			}
+		}
 
         data->buffer_index = (data->buffer_index + 1) % data->buffer_size;
         k_mutex_unlock(&data->mutex);
