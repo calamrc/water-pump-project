@@ -12,15 +12,18 @@ target_include_directories(app PRIVATE
   include/display
   include/input
   include/timer
+  include/zbus
 )
 
 target_sources(app PRIVATE
   src/main.c
   src/flow_analyzer.c
+  src/flow_analyzer_thread.c
   src/error_handler.c
   src/thread_manager.c
   src/ui_manager.c
   src/display/display_manager.c
   src/input/input_manager.c
   src/timer/timer_state_machine.c
+  src/zbus/channels.c
 )

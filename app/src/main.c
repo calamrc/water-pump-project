@@ -4,14 +4,10 @@
  */
 
 #include <app/drivers/pump_controller.h>
-#include <app/drivers/yf_s201c.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <app_version.h>
-#include "fixed_math.h"
 #include "error_handler.h"
-#include "flow_analyzer.h"
 #include "thread_manager.h"
 #include "ui_manager.h"
 
@@ -35,13 +31,6 @@ int main(void)
     if (ret < 0) {
         LOG_ERR("Could not initialize error handler (%d)", ret);
         return ERROR_REPORT_CRITICAL(ERROR_SYSTEM_CRITICAL_FAILURE);
-    }
-
-    // Initialize flow analyzer
-    ret = flow_analyzer_init();
-    if (ret < 0) {
-        LOG_ERR("Could not initialize flow analyzer (%d)", ret);
-        return ERROR_REPORT_CRITICAL(ERROR_FLOW_CALCULATION_ERROR);
     }
 
     // Initialize UI manager (display and input)
