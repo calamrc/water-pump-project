@@ -24,6 +24,20 @@ int thread_manager_create_all_threads(void);
 void thread_manager_monitor_health(void);
 
 /**
+ * @brief Request a system shutdown
+ *
+ * @return 0 on success, -EALREADY if already requested
+ */
+int thread_manager_request_shutdown(void);
+
+/**
+ * @brief Check if shutdown has been requested
+ *
+ * @return true if shutdown requested, false otherwise
+ */
+bool thread_manager_is_shutdown_requested(void);
+
+/**
  * @brief Gracefully shutdown all threads
  *
  * @return 0 on success, negative errno on failure

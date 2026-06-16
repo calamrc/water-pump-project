@@ -3,3 +3,6 @@ rsource "pump/Kconfig"
 
 # YF-S201C Flow Sensor Driver Configuration
 rsource "sensor/yf_s201c/Kconfig"
+
+# Feedback Relay Driver Configuration
+rsource "feedback_relay/Kconfig"
