@@ -13,7 +13,7 @@ LOG_MODULE_REGISTER(pump_controller);
 /* State transition table - copied from original implementation */
 static const pump_state_t state_transition_table[PUMP_STATE_COUNT][PUMP_EVENT_COUNT] = {
     /* OFF -> */ {
-        PUMP_STATE_STARTING,     /* PLATEAU_DETECTED: valid start */
+        PUMP_STATE_RUNNING,
         PUMP_STATE_OFF,          /* TIMEOUT: already off, ignore */
         PUMP_STATE_OFF,          /* SAFETY_TIMEOUT: already off, ignore */
         PUMP_STATE_ERROR,        /* ERROR_DETECTED: enter error state */
