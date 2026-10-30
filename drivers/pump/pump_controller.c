@@ -107,21 +107,12 @@ static int set_relay_state(const struct gpio_dt_spec *relay, bool turn_on)
     return gpio_pin_set_dt(relay, turn_on ? 1 : 0);
 }
 
-/* Safety timer handler */
+/* Timer expiry runs in interrupt context. It may only queue the shutdown. */
 static void safety_timer_handler(struct k_timer *timer)
 {
-    /* Get device from timer user data */
     struct pump_data *data = k_timer_user_data_get(timer);
 
-    LOG_WRN("Safety timer expired - executing emergency pump shutdown");
-
-    k_mutex_lock(&data->mutex, K_FOREVER);
-    int ret = execute_state_transition(data, NULL, PUMP_STATE_OFF);
-    k_mutex_unlock(&data->mutex);
-
-    if (ret < 0) {
-        LOG_ERR("Critical: Safety timer failed to shut down pump (%d)", ret);
-    }
+    k_work_submit(&data->safety_work);
 }
 
 /* State transition execution */
@@ -247,6 +238,22 @@ static int execute_state_transition(struct pump_data *data, const struct pump_co
     return ret;
 }
 
+static void safety_work_handler(struct k_work *work)
+{
+    struct pump_data *data = CONTAINER_OF(work, struct pump_data, safety_work);
+    const struct pump_config *config = data->dev->config;
+
+    LOG_WRN("Safety timer expired - executing emergency pump shutdown");
+
+    k_mutex_lock(&data->mutex, K_FOREVER);
+    int ret = execute_state_transition(data, config, PUMP_STATE_OFF);
+    k_mutex_unlock(&data->mutex);
+
+    if (ret < 0) {
+        LOG_ERR("Critical: Safety timer failed to shut down pump (%d)", ret);
+    }
+}
+
 /* Process state transition event */
 static int process_event(struct pump_data *data, const struct pump_config *config, pump_event_t event)
 {
@@ -304,10 +311,12 @@ static int pump_controller_init(const struct device *dev)
         return ret;
     }
 
+    data->dev = dev;
+
     /* Initialize mutex */
     k_mutex_init(&data->mutex);
 
-    /* Initialize timer with user data pointing to device data */
+    k_work_init(&data->safety_work, safety_work_handler);
     k_timer_init(&data->safety_timer, safety_timer_handler, NULL);
     k_timer_user_data_set(&data->safety_timer, data);
 

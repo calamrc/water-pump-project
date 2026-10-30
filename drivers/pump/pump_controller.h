@@ -57,7 +57,9 @@ struct pump_data {
     bool safety_systems_active;
     k_timepoint_t state_entry_time;
     struct k_timer safety_timer;
+    struct k_work safety_work;
     struct k_mutex mutex;
+    const struct device *dev;
 };
 
 /**
