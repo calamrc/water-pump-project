@@ -51,7 +51,7 @@ static void timer_tick_work_handler(struct k_work *work)
 
 	bool state_changed = timer_sm_update();
 
-	if (state_changed || current_state == TIMER_STATE_RUNNING) {
+	if (!state_changed && current_state == TIMER_STATE_RUNNING) {
 		timer_sm_publish_state();
 	}
 }
