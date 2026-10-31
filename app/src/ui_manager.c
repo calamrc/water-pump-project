@@ -141,7 +141,6 @@ static void handle_input_event(const struct ui_input_event *event)
 		input_manager_enable(false);
 		display_manager_show_dialog("Restart?", "Yes", "No", true);
 		display_manager_update();
-		publish_feedback(FEEDBACK_ACTION_CLICK, 0);
 		input_manager_enable(true);
 		return;
 	}
@@ -155,8 +154,6 @@ static void handle_input_event(const struct ui_input_event *event)
 	}
 
 	if (event->button_press != BUTTON_PRESS_NONE) {
-		publish_feedback(FEEDBACK_ACTION_CLICK, 0);
-
 		current_state = timer_sm_get_state();
 
 		LOG_INF("Button: %s (state=%s)",
