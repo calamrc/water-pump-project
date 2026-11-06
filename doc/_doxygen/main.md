@@ -1,47 +1,31 @@
 # Introduction
 
-This is the Doxygen documentation for the [Zephyr Water Pump Application].
+This is the Doxygen documentation for the Zephyr Water Pump Application.
 
 ## Application Structure
 
-The application implements intelligent water pump control with the following main components:
+`main()` initializes the error handler, the UI manager, and the pump controller, then starts the worker threads. Health monitoring stays in the main thread.
 
-### Core Functionality (`main.c`)
-- **Flow Measurement**: Real-time processing of YF-S201C flow sensor data
-- **Signal Processing**: Advanced filtering and outlier rejection algorithms
-- **Plateau Detection**: Statistical analysis for flow stability determination
-- **Pump Control**: Safe relay operation with timeout protection
+### Threads
 
-### Key Functions
+- **Sensor monitor**: YF-S201C flow samples
+- **Flow analyzer**: fixed-point filtering and plateau detection
+- **Pump controller**: relay control from analyzer and timer events
+- **Safety monitor**: runtime limit and stale-data shutdown
+- **UI manager**: SH1106 display through Zephyr's character framebuffer, plus button input
 
-#### Flow Sensor Processing
-- `flow_sensor_isr()`: Interrupt handler for sensor pulses
-- `get_median()`: Robust median calculation for noise filtering
-- `calibrate_plateau()`: Statistical calibration of flow stability
+The timer state machine runs inside the UI path and publishes countdown state on zbus. The thread manager creates the threads and watches their health.
 
-#### State Management
-- `detect_plateau()`: Algorithm for identifying stable flow conditions
-- `safety_timer_handler()`: Emergency pump shutdown mechanism
-- `main()`: Application initialization and control loop
-
-#### Configuration
-- **Sensor Constants**: YF-S201C specifications and thresholds
-- **Safety Parameters**: Runtime limits and protection mechanisms
-- **Algorithm Tuning**: Plateau detection and filtering coefficients
+Drivers under `drivers/` own the pump relay, the feedback relay, and the flow sensor. Modules publish state on zbus.
 
 ## Safety Features
 
-- Maximum 5-minute pump runtime with automatic shutdown
-- Stale data detection preventing operation on sensor failure
-- Statistical outlier rejection for robust measurements
-- Comprehensive error logging and state monitoring
+- Pump runtime limit with automatic shutdown
+- Stale sensor data stops the pump
+- Error reporting through the error handler
 
-## Hardware Abstraction
+## Hardware
 
-The application uses Zephyr's GPIO, timer, and semaphore APIs for:
-- Interrupt-driven sensor reading (GPIO 23)
-- Pump relay control (GPIO 22, active low)
-- Safety timeout implementation
-- Task synchronization
-
-[Zephyr Water Pump Application]: https://github.com/zephyrproject-rtos/water-pump
+- Flow sensor on GPIO 23
+- Pump relay on GPIO 22, active low
+- SH1106 128x64 display
