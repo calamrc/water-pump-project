@@ -1,0 +1,47 @@
+---
+title: "Pump run loop"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: off
+    lg1: running
+    lg2: lockout
+  }
+  class lg0 tan
+  class lg1 teal
+  class lg2 orange
+  s0: Pump off
+  s1: Pump running
+  s2: Pump running, short period
+  s3: Pump running, period grew
+  s4: Just stopped for no flow
+  s5: One second since the stop
+  s6: A new start was ignored
+  s7: Two seconds since the stop
+  s8: A new start was ignored, one second gone
+  [*] --> s0
+  s0 --> s1: a plateau starts the pump
+  s0 --> s2: a short plateau starts the pump
+  s1 --> s0: emergency stop
+  s1 --> s4: sensor data times out
+  s2 --> s0: emergency stop
+  s2 --> s3: a longer plateau arrives
+  s2 --> s4: sensor data times out
+  s3 --> s0: emergency stop
+  s3 --> s4: sensor data times out
+  s4 --> s5: a second passes
+  s4 --> s6: a plateau arrives too soon
+  s5 --> s7: a second passes
+  s5 --> s8: a plateau arrives too soon
+  s6 --> s5: a second passes
+  s7 --> s1: a plateau starts the pump
+  s8 --> s7: a second passes
+  class s0 tan
+  class s1 teal
+  class s2 teal
+  class s3 teal
+  class s4 orange
+  class s5 orange
+  class s6 orange
+  class s7 orange
+  class s8 orange

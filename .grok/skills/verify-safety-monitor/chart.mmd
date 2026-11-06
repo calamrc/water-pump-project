@@ -1,0 +1,51 @@
+---
+title: "Safety monitor"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: idle
+    lg1: running
+    lg2: stopped
+    lg3: wrong
+    lg4: Breaks LatchedMeansOff or NoDeadlock
+    lg5: Path to the LatchedMeansOff or NoDeadlock bug
+  }
+  class lg0 tan
+  class lg1 teal
+  class lg2 orange
+  class lg3 pink
+  class lg4 breaks
+  class lg5 bugPath
+  s0: Pump off
+  s1: Running
+  s2: Running, sensor has gone quiet
+  s3: Stopped by the monitor
+  s4: Stop failed, pump still on
+  s5: Running, near the time limit
+  [*] --> s0
+  s0 --> s1: the pump turns on
+  s1 --> s0: the pump turns off
+  s1 --> s2: the sensor goes quiet
+  s2 --> s0: the pump turns off
+  s2 --> s1: a sensor sample arrives
+  s2 --> s3: the quiet sensor trips the stop or time passes
+  s2 --> s4: the stop call fails
+  s1 --> s5: time passes
+  s3 --> s0: the stop is confirmed
+  s5 --> s0: the pump turns off
+  s5 --> s3: time passes
+  s5 --> s2: the sensor goes quiet
+  s5 --> s4: the stop call fails
+  s2 --> s5: a sensor sample arrives
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 tan
+  class s0 bugPath
+  class s1 teal
+  class s1 bugPath
+  class s2 teal
+  class s2 bugPath
+  class s3 orange
+  class s4 pink
+  class s4 breaks
+  class s4 bugPath
+  class s5 teal

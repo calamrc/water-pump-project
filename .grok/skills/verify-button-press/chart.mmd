@@ -1,0 +1,28 @@
+---
+title: "Button press"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: up
+    lg1: down
+    lg2: hold
+  }
+  class lg0 tan
+  class lg1 yellow
+  class lg2 orange
+  s0: Button up
+  s1: Held, under one second
+  s2: Hold already sent
+  s3: Held, past one second
+  [*] --> s0
+  s0 --> s1: you press the button
+  s1 --> s2: three seconds pass
+  s1 --> s3: one second passes
+  s1 --> s0: you let go
+  s2 --> s0: you let go after the hold
+  s3 --> s2: three seconds pass
+  s3 --> s0: you let go after one second
+  class s0 tan
+  class s1 yellow
+  class s2 orange
+  class s3 yellow

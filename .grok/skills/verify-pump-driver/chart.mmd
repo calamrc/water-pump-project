@@ -1,0 +1,39 @@
+---
+title: "Pump driver"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: off
+    lg1: running
+    lg2: fault
+    lg3: wrong
+    lg4: Breaks RelayMatchesRun
+    lg5: Path to the RelayMatchesRun bug
+  }
+  class lg0 tan
+  class lg1 teal
+  class lg2 orange
+  class lg3 pink
+  class lg4 breaks
+  class lg5 bugPath
+  s0: Off
+  s1: Relay write failed
+  s2: Running
+  s3: Off, relay still energized
+  [*] --> s0
+  s0 --> s1: the relay refuses to close
+  s0 --> s2: a plateau starts the pump
+  s1 --> s0: reset after a failed relay write
+  s2 --> s0: emergency stop or the safety timer fires or the run stops
+  s2 --> s3: the run stops and the relay sticks closed
+  s3 --> s1: the relay refuses to close
+  s3 --> s2: a plateau starts the pump
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 tan
+  class s0 bugPath
+  class s1 orange
+  class s2 teal
+  class s2 bugPath
+  class s3 pink
+  class s3 breaks
+  class s3 bugPath
