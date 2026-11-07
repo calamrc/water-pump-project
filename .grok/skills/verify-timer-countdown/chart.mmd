@@ -1,0 +1,75 @@
+---
+title: "Countdown timer"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: setting
+    lg1: running
+    lg2: paused
+    lg3: completed
+    lg4: wrong
+    lg5: Breaks OwedOnlyWhileRunning or PauseDoesNotCorrupt
+    lg6: Path to the OwedOnlyWhileRunning or PauseDoesNotCorrupt bug
+  }
+  class lg0 yellow
+  class lg1 teal
+  class lg2 orange
+  class lg3 purple
+  class lg4 pink
+  class lg5 breaks
+  class lg6 bugPath
+  s0: Setting the time
+  s1: Counting down
+  s2: Paused
+  s3: Counting down, a second is in flight
+  s4: Paused, a tick is still writing
+  s5: Setting the time, a tick is still writing
+  s6: Finished
+  s7: Paused, countdown moved after it should have stopped
+  s8: Setting the time, countdown moved after it should have stopped
+  s9: Finished, countdown moved after it should have stopped
+  s10: Counting down, countdown moved after it should have stopped
+  [*] --> s0
+  s0 --> s1: you press start
+  s1 --> s0: you press reset
+  s1 --> s2: you press pause
+  s1 --> s3: a second passes
+  s2 --> s0: you press reset
+  s2 --> s1: you press resume
+  s3 --> s1: the tick writes the new second
+  s3 --> s4: you press pause
+  s3 --> s5: you press reset
+  s3 --> s6: the tick writes the new second
+  s4 --> s3: you press resume
+  s4 --> s5: you press reset
+  s4 --> s7: the tick writes the new second
+  s5 --> s3: you press start
+  s5 --> s8: the tick writes the new second
+  s6 --> s0: you press reset
+  s4 --> s9: the tick writes the new second
+  s7 --> s8: you press reset
+  s9 --> s8: you press reset
+  s10 --> s8: you press reset
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 yellow
+  class s0 bugPath
+  class s1 teal
+  class s1 bugPath
+  class s2 orange
+  class s3 teal
+  class s3 bugPath
+  class s4 pink
+  class s4 breaks
+  class s4 bugPath
+  class s5 pink
+  class s5 breaks
+  class s6 purple
+  class s7 pink
+  class s7 breaks
+  class s7 bugPath
+  class s8 pink
+  class s8 breaks
+  class s9 pink
+  class s9 breaks
+  class s10 pink
+  class s10 breaks

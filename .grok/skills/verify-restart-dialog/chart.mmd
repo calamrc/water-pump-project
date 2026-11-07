@@ -1,0 +1,43 @@
+---
+title: "Restart question"
+---
+stateDiagram-v2
+  direction LR
+  state "Legend" as legend {
+    lg0: main
+    lg1: asking
+    lg2: reboot
+  }
+  class lg0 teal
+  class lg1 yellow
+  class lg2 orange
+  state "At the same time" as all {
+    state "Question" as r0 {
+      s0: Timer screen
+      s1: Restart, Yes
+      s2: Restart, No
+      s3: Rebooting
+      [*] --> s0
+      s0 --> s1: you hold the button
+      s1 --> s2: you turn the dial
+      s1 --> s3: you confirm restart
+      s2 --> s0: you cancel restart
+      s2 --> s1: you turn the dial
+    }
+    --
+    state "Timer" as r1 {
+      s4: Setting the time
+      s5: Counting down
+      s6: Finished
+      s7: Paused
+      [*] --> s4
+      s4 --> s5: you press start [when Timer screen]
+      s5 --> s6: the countdown finishes
+      s5 --> s7: you press pause [when Timer screen]
+      s7 --> s5: you press resume [when Timer screen]
+    }
+  }
+  class s0 teal
+  class s1 yellow
+  class s2 yellow
+  class s3 orange

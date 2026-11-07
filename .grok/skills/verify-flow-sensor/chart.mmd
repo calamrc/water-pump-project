@@ -1,0 +1,51 @@
+---
+title: "Flow sensor"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: ready
+    lg1: running
+    lg2: fault
+    lg3: wrong
+    lg4: Breaks NoPositiveRateInError
+    lg5: Path to the NoPositiveRateInError bug
+  }
+  class lg0 yellow
+  class lg1 teal
+  class lg2 orange
+  class lg3 pink
+  class lg4 breaks
+  class lg5 bugPath
+  s0: Ready
+  s1: Ready, one bad pulse
+  s2: Measuring
+  s3: Faulted
+  s4: Measuring, one bad pulse
+  s5: Faulted, last rate still readable
+  [*] --> s0
+  s0 --> s1: a pulse looks invalid
+  s0 --> s2: a pulse looks valid
+  s1 --> s0: the sensor resets
+  s1 --> s2: a pulse looks valid
+  s1 --> s3: a pulse looks invalid
+  s2 --> s0: the sensor resets
+  s2 --> s4: a pulse looks invalid
+  s3 --> s0: the sensor resets
+  s3 --> s2: a pulse looks valid
+  s4 --> s0: the sensor resets
+  s4 --> s2: a pulse looks valid
+  s4 --> s5: a pulse looks invalid
+  s5 --> s0: the sensor resets
+  s5 --> s2: a pulse looks valid
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 yellow
+  class s0 bugPath
+  class s1 yellow
+  class s2 teal
+  class s2 bugPath
+  class s3 orange
+  class s4 teal
+  class s4 bugPath
+  class s5 pink
+  class s5 breaks
+  class s5 bugPath
