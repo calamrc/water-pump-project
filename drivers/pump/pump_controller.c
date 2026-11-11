@@ -156,15 +156,16 @@ static int execute_state_transition(struct pump_data *data, const struct pump_co
         break;
 
     case PUMP_STATE_RUNNING:
-        /* Stop safety timer */
-        k_timer_stop(&data->safety_timer);
-        /* Force pump relay OFF */
-        if (config && gpio_is_ready_dt(&config->relay)) {
-            ret = set_relay_state(&config->relay, false);
-            if (ret < 0) {
-                LOG_ERR("Failed to set pump relay OFF during transition (%d)", ret);
-            }
+        if (config == NULL || !gpio_is_ready_dt(&config->relay)) {
+            LOG_ERR("Pump relay is not ready to turn off");
+            return -ENODEV;
         }
+        ret = set_relay_state(&config->relay, false);
+        if (ret < 0) {
+            LOG_ERR("Failed to set pump relay OFF during transition (%d)", ret);
+            return ret;
+        }
+        k_timer_stop(&data->safety_timer);
         break;
 
     case PUMP_STATE_TIMEOUT:
