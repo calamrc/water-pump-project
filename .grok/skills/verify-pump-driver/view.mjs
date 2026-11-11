@@ -19,7 +19,7 @@ export const step = (action) => {
     TurnOn: "a plateau starts the pump",
     RelayOnFails: "the relay refuses to close",
     TurnOff: "the run stops",
-    StopRelaySticks: "the run stops and the relay sticks closed",
+    StopRelayFails: "the relay refuses to open",
     SafetyExpiry: "the safety timer fires",
     EmergencyStop: "emergency stop",
     ResetFromError: "reset after a failed relay write",

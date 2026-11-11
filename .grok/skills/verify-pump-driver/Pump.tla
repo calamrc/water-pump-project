@@ -28,10 +28,10 @@ TurnOff ==
   /\ phase' = "off"
   /\ relay' = FALSE
 
-StopRelaySticks ==
+\* A failed coil write leaves the phase and the relay alone.
+StopRelayFails ==
   /\ phase = "running"
-  /\ phase' = "off"
-  /\ relay' = TRUE
+  /\ UNCHANGED <<phase, relay>>
 
 SafetyExpiry ==
   /\ phase = "running"
@@ -50,7 +50,7 @@ ResetFromError ==
 
 Next ==
   \/ TurnOn \/ RelayOnFails
-  \/ TurnOff \/ StopRelaySticks
+  \/ TurnOff \/ StopRelayFails
   \/ SafetyExpiry \/ EmergencyStop
   \/ ResetFromError
 
