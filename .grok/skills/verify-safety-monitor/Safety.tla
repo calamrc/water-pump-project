@@ -65,10 +65,7 @@ StopFails ==
   /\ mode = "running"
   /\ \/ runtime + 1 >= MaxTicks
      \/ sensor = "old"
-  /\ mode' = "latched"
-  /\ pump' = TRUE
-  /\ runtime' = IF runtime < MaxTicks THEN runtime + 1 ELSE runtime
-  /\ UNCHANGED <<sensor, starts>>
+  /\ UNCHANGED vars
 
 TurnedOff ==
   /\ mode = "running"
