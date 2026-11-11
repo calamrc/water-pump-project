@@ -704,7 +704,6 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 
 			if (runtime_ms >= max_runtime_ms) {
 				emergency_stops++;
-				emergency_stop_active = true;
 				LOG_ERR("Safety monitor: EMERGENCY STOP - Maximum runtime exceeded "
 					"(%lld ms > %lld ms)",
 					runtime_ms, max_runtime_ms);
@@ -713,6 +712,7 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 					thread_health_update(k_current_get(), THREAD_HEALTH_ERROR, 0,
 							     1);
 				} else {
+					emergency_stop_active = true;
 					thread_health_update(k_current_get(), THREAD_HEALTH_OK, 0, 0);
 				}
 				continue;
@@ -723,7 +723,6 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 
 				if (sensor_age_ms > CONFIG_APP_SAFETY_MONITOR_MAX_SENSOR_TIMEOUT_MS) {
 					emergency_stops++;
-					emergency_stop_active = true;
 					LOG_ERR("Safety monitor: EMERGENCY STOP - No sensor data "
 						"since pump start (%lld ms)",
 						sensor_age_ms);
@@ -732,6 +731,7 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 						thread_health_update(k_current_get(), THREAD_HEALTH_ERROR,
 								     0, 1);
 					} else {
+						emergency_stop_active = true;
 						thread_health_update(k_current_get(), THREAD_HEALTH_OK,
 								     0, 0);
 					}
@@ -741,7 +741,6 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 				int64_t sensor_age_ms = current_time - last_sensor_data_time;
 				if (sensor_age_ms > CONFIG_APP_SAFETY_MONITOR_MAX_SENSOR_TIMEOUT_MS) {
 					emergency_stops++;
-					emergency_stop_active = true;
 					LOG_ERR("Safety monitor: EMERGENCY STOP - Sensor data stall "
 						"(%lld ms > %d ms)",
 						sensor_age_ms,
@@ -751,6 +750,7 @@ void safety_monitor_thread(void *arg1, void *arg2, void *arg3)
 						thread_health_update(k_current_get(), THREAD_HEALTH_ERROR,
 								     0, 1);
 					} else {
+						emergency_stop_active = true;
 						thread_health_update(k_current_get(), THREAD_HEALTH_OK,
 								     0, 0);
 					}
