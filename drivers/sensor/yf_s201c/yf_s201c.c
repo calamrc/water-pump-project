@@ -143,6 +143,7 @@ if (data->valid_periods >= data->buffer_size) {
             // Reset buffer
             k_mutex_lock(&data->mutex, K_FOREVER);
             data->valid_periods = 0;
+            data->period_us = 0;
             memset((void *)data->period_buffer, 0, sizeof(data->period_buffer));
             k_mutex_unlock(&data->mutex);
 
