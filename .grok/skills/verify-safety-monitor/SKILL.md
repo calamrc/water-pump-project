@@ -12,7 +12,7 @@ The check is a TLA+ model of `safety_monitor_thread` in `app/src/thread_manager.
 
 ## What holds
 
-`TypeOK`, `OneStartPerRun`, `LatchedMeansOff`, `RunningHasPump`, and `NoDeadlock` hold. TLC reached 16 states. A failed stop is `StopFails`. It changes nothing, so the chart does not draw it. The latch is set only in the success arm of `execute_emergency_stop`, on the runtime limit, the never-saw-data timeout, and the stall timeout.
+`TypeOK`, `OneStartPerRun`, `LatchedMeansOff`, `RunningHasPump`, and `NoDeadlock` hold. TLC reached 16 states. A failed stop is `StopFails`. It changes nothing, so the chart does not draw it. `safety_monitor_thread` sets the latch only after `execute_emergency_stop` returns 0, on the runtime limit, the never-saw-data timeout, and the stall timeout.
 
 A scratch where `StopFails` sets the latch and leaves the pump on fails `LatchedMeansOff` and `NoDeadlock`. The path is the pump turns on, the sensor goes quiet, the stop call fails. That copy is not the committed spec. `OneStartPerRun` holds because a second on-message while the pump is already on does not move `pump_on_time`. The chart hides that message because it changes nothing. A model where that message increments the start count fails `OneStartPerRun`. `RunningHasPump` holds. A scratch that enters running with the pump still off fails it on the turn-on step.
 
