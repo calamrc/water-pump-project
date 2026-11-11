@@ -6,7 +6,7 @@ description: >
   or when the user runs /verify-flow-sensor.
 ---
 
-A flow reading must not stay available after the sensor is in `ERROR`. The driver leaves `period_us` in place, and `yf_s201c_get_flow_rate` refuses only `INIT`, so a caller that skips `yf_s201c_is_data_valid` reports water that the sensor has rejected.
+A flow reading must not stay available after the sensor is in `ERROR`. The error arm clears `period_us` in the same locked update that resets the sample buffer.
 
 The check is a TLA+ model of the mode changes in `drivers/sensor/yf_s201c/yf_s201c.c`. Read every result with `/statechart`. The spec is `Sensor.tla` in this directory. The config is `Sensor.cfg`. The view is `view.mjs`. `chart.mmd` is the last drawing. It is not the proof. Regenerate it.
 
