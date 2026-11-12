@@ -21,8 +21,8 @@ properties:
 
   min-period-us:
     type: int
-    default: 100
-    description: Minimum valid period between pulses in microseconds
+    default: 2500
+    description: Shortest pulse period, in microseconds, that still counts as flow
 
   buffer-size:
     type: int
