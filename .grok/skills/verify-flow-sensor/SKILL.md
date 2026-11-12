@@ -6,13 +6,15 @@ description: >
   or when the user runs /verify-flow-sensor.
 ---
 
-A flow reading must not stay available after the sensor is in `ERROR`. The driver leaves `period_us` in place, and `yf_s201c_get_flow_rate` refuses only `INIT`, so a caller that skips `yf_s201c_is_data_valid` reports water that the sensor has rejected.
+A flow reading must not stay available after the sensor is in `ERROR`. The error arm clears `period_us` while it holds the sample lock, and then it stores `ERROR`.
 
 The check is a TLA+ model of the mode changes in `drivers/sensor/yf_s201c/yf_s201c.c`. Read every result with `/statechart`. The spec is `Sensor.tla` in this directory. The config is `Sensor.cfg`. The view is `view.mjs`. `chart.mmd` is the last drawing. It is not the proof. Regenerate it.
 
-## Already broken
+## What holds
 
-`NoPositiveRateInError` fails. The shortest path is a valid pulse, one invalid pulse, and a second invalid pulse. The mode becomes `ERROR` and `rateKept` stays true. The error arm in `yf_s201c_work_handler` stores `YF_S201C_ERROR` and does not clear `period_us`. `yf_s201c_is_data_valid` returns false for `INIT` and for `ERROR` by its own mode test. That test is not a second TLC rule. Copying it into the spec cannot fail. `NoDeadlock` holds.
+`TypeOK`, `NoPositiveRateInError`, and `NoDeadlock` hold. TLC reached 5 states. The error arm sets `period_us` to 0 before it stores `YF_S201C_ERROR`. `yf_s201c_get_flow_rate` still refuses only `INIT`. With the period cleared, that call returns 0. `yf_s201c_is_data_valid` still returns false for `ERROR` by its own mode test. That test is not a second TLC rule.
+
+A scratch that leaves `rateKept` unchanged when the invalid count reaches the threshold fails `NoPositiveRateInError`. The path is a valid pulse, one invalid pulse, and the invalid pulse that reaches the threshold. That copy is not the committed spec.
 
 ## Bounds
 
@@ -26,6 +28,6 @@ The boot race where the interrupt is enabled before init stores `READY`, so a sa
 
 ## Coverage
 
-Files are `drivers/sensor/yf_s201c/yf_s201c.c` and `drivers/sensor/yf_s201c/yf_s201c.h`. Functions are `yf_s201c_work_handler`, `yf_s201c_reset`, `yf_s201c_get_flow_rate`, `yf_s201c_is_data_valid`. Sync commit is `22c1d37280064eabc7f60925729d4c303c908de8`.
+Files are `drivers/sensor/yf_s201c/yf_s201c.c` and `drivers/sensor/yf_s201c/yf_s201c.h`. Functions are `yf_s201c_work_handler`, `yf_s201c_reset`, `yf_s201c_get_flow_rate`, `yf_s201c_is_data_valid`. Sync commit is `5ca5a2c46fb5f05cc76a222b77f4e7691ed2f500`.
 
-Move that commit forward only after you confirm the spec still describes those functions. The known failure is a positive period left behind in `ERROR`. Any other path is a new bug or a modeling error. Do not edit product code from this skill. Use `/maintain-formal-verification-skill` when the code and the spec drift.
+Move that commit forward only after you confirm the spec still describes those functions. A path that keeps a positive period in `ERROR` is a regression. Any other failing path is a new bug or a modeling error. Do not edit product code from this skill. Use `/maintain-formal-verification-skill` when the code and the spec drift.

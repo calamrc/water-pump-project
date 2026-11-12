@@ -24,7 +24,7 @@ InvalidSample ==
   /\ invalid < Threshold
   /\ invalid' = invalid + 1
   /\ mode' = IF invalid + 1 >= Threshold THEN "error" ELSE mode
-  /\ UNCHANGED rateKept
+  /\ rateKept' = IF invalid + 1 >= Threshold THEN FALSE ELSE rateKept
 
 Reset ==
   /\ mode' = "ready"
